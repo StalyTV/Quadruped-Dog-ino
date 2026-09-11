@@ -181,8 +181,24 @@ runs at its limit. The existing pack remains fine for single-leg bench work.
 The hip roll joints are the worst case for continuous current. Because the hip
 pitch axis is offset laterally from the roll axis by `l1`, each roll servo
 statically holds a moment of roughly (body weight per leg) times `l1` whenever
-the robot stands. There is no duty cycle relief on that. Measure it before
-trusting the servo rating.
+the robot stands. There is no duty cycle relief on that.
+
+With `l1` now measured at 42 mm, this is less alarming than it looked. The
+static holding torque per roll servo is:
+
+| Robot mass | Per leg | Roll servo holds | Fraction of 30 kg-cm |
+|---|---|---|---|
+| 2.0 kg | 0.50 kg | 2.10 kg-cm | 7 percent |
+| 2.5 kg | 0.63 kg | 2.62 kg-cm | 9 percent |
+| 3.0 kg | 0.75 kg | 3.15 kg-cm | 11 percent |
+| 3.5 kg | 0.88 kg | 3.67 kg-cm | 12 percent |
+
+So the roll joints have a wide torque margin even at the heavy end. This is a
+calculation of torque, not of current, and the two are not the same thing: a
+servo under a light load still draws current hunting around its setpoint, and
+the aggregate idle draw of twelve servos is what the power system has to
+survive. The known problem above stands. Measure the actual current before
+trusting either number.
 
 ## 4. Mechanical design
 
@@ -204,16 +220,21 @@ CAD, with all joints at their zero positions, measuring between construction
 axes through each joint's rotation centre. Never between mounting faces or screw
 holes.
 
-- `l1`: the common perpendicular between the hip roll axis and the hip pitch
-  axis. If the axes intersect, this is zero regardless of how far apart the
-  servos sit. Only the component that is lateral at `t1 = 0` counts as `l1`;
-  any fore-aft or vertical component is a fixed translation, subtracted from the
-  foot target once at setup.
-- `l2`: hip pitch axis to knee axis.
-- `l3`: knee axis to foot contact point. If the foot is a ball or hemisphere,
-  measure to the centre of the ball and treat the ground as one ball-radius
-  higher. Re-measure under load, since a compliant foot is shorter when standing
-  on it.
+- `l1` = **42 mm**: the perpendicular distance from the hip roll axis out to the
+  leg plane, that is, how far outboard the pitch axis is carried. Measured to
+  the pitch joint's centre, not between the two axis lines — those intersect
+  here, so the distance between them is zero and means nothing. See
+  `kinematics.md` section 2, which used to get this wrong.
+- `l2` = **80 mm**: hip pitch axis to knee axis.
+- `l3` = **80 mm**: knee axis to foot contact point, unloaded. If the foot is a
+  ball or hemisphere, measure to the centre of the ball and treat the ground as
+  one ball-radius higher. Re-measure under load, since a compliant foot is
+  shorter when standing on it; that figure is still outstanding.
+
+Because `l2` and `l3` came out equal, maximum reach is 160 mm, there is no
+inner unreachable region, and the nominal stance sits at 125 mm with the thigh
+bisecting the knee. The derived stance, joint travel and stride limits are
+tabulated in `kinematics.md` section 2.
 - Body geometry: the position of each leg's hip roll axis in the body frame.
   These are the `r` vectors used for the turning calculation.
 - Linkage geometry: servo pivot position, horn radius, pushrod length, and the

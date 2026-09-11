@@ -25,8 +25,13 @@ mirroring is handled once, here, rather than being smeared through the math.
 
 **Joint angles.**
 
-- `t1`, hip roll (abduction). Zero when the leg plane is vertical. Positive
-  swings the foot outward, away from the body.
+- `t1`, hip roll (abduction). Zero when the leg plane is vertical. Positive is a
+  right-handed rotation about the leg-frame x axis, which swings the foot
+  **inward**, toward the body centreline. The wording here used to say outward;
+  it is not. From section 3, `y = l1*cos(t1) - fd*sin(t1)`, so `dy/dt1 = -fd`
+  at `t1 = 0`, which is negative. This sign decides `dir` in the section 8
+  calibration table and the sense of the abduction limits, so getting it
+  backwards mirrors the leg.
 - `t2`, hip pitch. Measured from straight down, positive forward.
 - `t3`, knee flexion. Measured from full extension, so `t3 = 0` is a straight
   leg and positive means bent.
@@ -39,21 +44,81 @@ used as an array index everywhere.
 
 ## 2. Link parameters
 
-- `l1`: common perpendicular from the hip roll axis to the hip pitch axis. This
-  is a property of the two axes, not of the parts. If the axes intersect,
-  `l1 = 0` no matter how far apart the servos are mounted. Only the component
-  that is lateral at `t1 = 0` belongs here. Any fore-aft or vertical offset is a
-  fixed translation, subtracted from the foot target once at setup.
+- `l1`: the perpendicular distance from the hip roll axis out to the leg plane,
+  which is to say how far outboard the hip pitch axis is carried. Measure it
+  from the roll axis to the pitch joint's *centre*, not between the two axis
+  lines. On this robot those two lines intersect: the roll axis runs fore-aft,
+  the pitch axis runs laterally, and they cross at the leg-frame origin, so the
+  line-to-line distance between them is zero and carries no information. This
+  entry used to call `l1` the common perpendicular between the axes and to say
+  that intersecting axes give `l1 = 0`. Read literally that yields zero, which
+  the forward kinematics contradict: `py = l1*cos(t1)` puts the pitch joint on a
+  circle of radius `l1` about the roll axis.
+
+  Only the component that is lateral at `t1 = 0` belongs here. A fore-aft offset
+  is a genuine fixed translation, subtracted from the foot target once at setup,
+  because the roll rotation is about that axis and never moves it. A *vertical*
+  offset `h` is not: it rotates with `t1` exactly as the lateral one does. Fold
+  it in with `r = hypot(l1, h)` as the link length, which shifts the joint zero
+  by `atan2(h, l1)` — a constant that `zero_us` in section 8 absorbs anyway.
 - `l2`: hip pitch axis to knee axis (thigh).
 - `l3`: knee axis to foot contact point (shank).
 
-On this robot `l1` is large, since a dedicated link carries the pitch axis
-outboard. That has two consequences worth remembering: the hip rises and falls
-as the leg abducts, and each roll servo holds a static moment of roughly
-(weight per leg) times `l1` whenever the robot stands.
+A dedicated link carries the pitch axis outboard, so `l1` is not negligible.
+That has two consequences worth remembering: the hip rises and falls as the leg
+abducts, and each roll servo holds a static moment of roughly (weight per leg)
+times `l1` whenever the robot stands.
 
 Also needed, per leg: the hip roll axis position in the body frame,
 `r_i = (rx, ry)`. These are the moment arms used for turning.
+
+### Measured values, and what follows from them
+
+Taken from CAD at the zero pose. `l3` is still the unloaded figure; re-measure
+it under load before trusting the stance height.
+
+    l1 = 42 mm      l2 = 80 mm      l3 = 80 mm
+
+Everything below is derived from those three numbers and should be recomputed if
+any of them changes.
+
+**Equal links simplify two things.** With `l2 == l3` the inner workspace bound
+`|l2 - l3|` is zero, so there is no unreachable region near the hip and the
+`D < fabs(l2 - l3)` test in section 4 can never fire. It also makes the stance
+triangle isoceles, so the thigh always bisects the knee: `t2 = t3/2` whenever
+the foot is directly below the pitch axis. That identity is worth using on the
+bench — set the knee, halve it for the hip.
+
+| Quantity | Value |
+|---|---|
+| Maximum reach from the pitch axis, `l2 + l3` | 160 mm |
+| Usable stance band, 70 to 85 percent of reach | 112 to 136 mm |
+| Nominal stance height, 78 percent | 125 mm |
+| Joint angles at nominal stance | `t1 = 0`, `t2 = 38.7`, `t3 = 77.5` degrees |
+| Body height offset range about nominal | -13 to +11 mm |
+
+**Joint travel**, taken as the union over every stride direction at an 80 mm
+stride, 30 mm step height, duty 0.5, from the nominal stance:
+
+| Joint | Range | Travel |
+|---|---|---|
+| `t1` | -21.5 to +24.6 deg | 46 deg |
+| `t2` | +13.0 to +68.7 deg | 56 deg |
+| `t3` | +49.7 to +111.5 deg | 62 deg |
+
+No joint needs more than 62 degrees, so a standard 180 degree servo has ample
+room. Set `min_us` and `max_us` in section 8 from these ranges plus a margin,
+not from the servo's full travel.
+
+**Stride limit.** At the 125 mm nominal stance, straight-line strides stay
+inside the 85 percent band up to about 100 mm. Beyond that the foot passes 86
+percent at the extremes of the path and heads toward the singularity. A
+sideways stride is the worse case, reaching 91 percent at 80 mm, because
+abduction costs reach that fore-aft motion does not. Clamp the commanded stride
+accordingly, and treat 100 mm as the ceiling until measured otherwise.
+
+The `height` field in `protocol.md` scales to the -13 to +11 mm band above. The
+Mega owns that clamp; do not widen it without rechecking the reach margin.
 
 ## 3. Forward kinematics
 
@@ -408,8 +473,12 @@ On hardware:
 
 ## 10. Open items
 
-- Link lengths `l1`, `l2`, `l3` not yet measured from CAD.
-- Hip positions `r_i` in the body frame not yet recorded.
+- ~~Link lengths `l1`, `l2`, `l3` not yet measured from CAD.~~ Measured: 42, 80
+  and 80 mm, see section 2. `l3` still needs re-measuring under load, and the
+  foot ball radius is not yet recorded.
+- Hip positions `r_i` in the body frame not yet recorded. This is now the
+  binding one: without it there is no turning, and no way to work out how far
+  the body can lean before a leg runs out of reach.
 - Linkage geometry (pivot, horn radius, pushrod length, attachment) not yet
   recorded.
 - Knee/thigh coupling unknown.
