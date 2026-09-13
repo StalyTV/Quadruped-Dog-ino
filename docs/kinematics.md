@@ -547,18 +547,55 @@ tolerance shifts it further. Store a per-servo table and calibrate once with the
 robot on a stand.
 
 ```c
-typedef struct { int16_t zero_us; float us_per_rad; int8_t dir; } ServoCal;
+typedef struct { float zero_us, us_per_rad; uint16_t min_us, max_us; } ServoCal;
 ServoCal cal[12];
 
-int pulse = cal[j].zero_us + cal[j].dir * theta[j] * cal[j].us_per_rad;
+int pulse = (int)(cal[j].zero_us + theta[j] * cal[j].us_per_rad);
 pulse = constrain(pulse, cal[j].min_us, cal[j].max_us);   /* always */
 ```
 
-Procedure: with the leg unloaded, command a known geometric pose, measure the
-actual joint angle with a protractor or from a photograph, and adjust `zero_us`
-until they agree. Then command a second pose far from the first and adjust
-`us_per_rad`. Record the per-joint mechanical travel limits at the same time and
-enforce them in software.
+`us_per_rad` is signed, so a servo that turns the other way is simply a negative
+slope. The separate `dir` field earlier revisions carried is redundant, and two
+places to express one sign is two places to get it wrong.
+
+### Procedure
+
+Run `pio run -e calibrate -t upload` and drive it over the serial monitor at
+115200. Everything starts released, so nothing moves until you say so.
+
+Rather than setting `zero_us` from one pose and `us_per_rad` from a second,
+**sweep and fit**: record eight to ten (pulse, measured angle) pairs across the
+working range and least-squares a line through them. Two points give a slope
+with no way to tell whether a line was the right model; a sweep gives the same
+two numbers plus a residual, and the residual is the informative part.
+
+For the hip pitch it is the whole point. That joint runs through a pushrod, so a
+linear fit is valid only if the linkage is a parallelogram, which is still an
+open question in `design.md`. Small, evenly scattered residuals say it is. Large
+residuals with a visible curve say it is not, and section 6's inversion is
+needed. The tool prints the worst residual in degrees and warns past two.
+
+Three things specific to this leg:
+
+- Measure the **angle between the links**, not each link's absolute angle.
+  `t3` is the shank angle minus the thigh angle. Taking the difference also
+  cancels any overall roll in the camera.
+- The knee cannot be calibrated on its own. The belt couples it to the hip, so
+  hold the hip **driven at a known position** for the whole knee sweep, and put
+  its contribution back with `q3 = t2 + ks*t3/N`.
+- Recalibrate from scratch if the PWM frequency changes. The frequency sets the
+  real pulse width, so every number in the table is specific to it.
+
+Assemble at the nominal stance if the frame allows. It centres each servo's
+travel in its range, which matters most at the knee, where 2:1 gearing means
+103 degrees of servo sweep. The horn spline still quantises the mounted zero to
+about 14.4 degree steps on a 25 tooth spline, so expect to be up to 7 degrees
+out however carefully you assemble. That residual is exactly what `zero_us` is
+for; it does not need to be fixed mechanically.
+
+Record the per-joint mechanical travel limits at the same time and enforce them
+in software. Enforce them on the **servo** angle, after the linkage and belt
+mappings, never on the joint angle.
 
 This table is a crude version of the same correction the learned IK model would
 provide, so how large the residual error is after calibration is the number that
