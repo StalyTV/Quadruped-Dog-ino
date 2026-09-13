@@ -431,6 +431,11 @@ void loop()
         char c = (char)Serial.read();
         if (c == '\n' || c == '\r') {
             if (len) { buf[len] = 0; command(buf); len = 0; }
+        } else if (c == 8 || c == 127) {
+            /* Backspace and delete. Terminals that send as you type have no
+               chance to edit the line first, so a typo would otherwise end up
+               in the buffer and the command would be rejected. */
+            if (len) len--;
         } else if (len < sizeof(buf) - 1) {
             buf[len++] = c;
         }
