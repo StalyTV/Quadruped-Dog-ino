@@ -48,11 +48,24 @@ static const ServoCal CAL[3] = {
    of the stride the stop costs: 90 mm instead of 70. */
 static const Gait BASE = { 90.0f, 0.50f, 30.0f, 125.0f, -12.0f };
 
-/* The knee servo sets the ceiling. The 2:1 belt that doubled its torque also
-   doubled its speed demand, and peak demand is in swing, scaling as
-   stride*frequency/(1-duty). At a 90 mm stride that is about 0.7 Hz against a
-   loaded 400 deg/s. See docs/kinematics.md section 7. */
-static const float MAX_GAIT_HZ = 0.70f;
+/* What "speed 100" means. The knee servo sets the ceiling: the 2:1 belt that
+   doubled its torque also doubled its speed demand, and peak demand falls in
+   swing, scaling as stride*frequency/(1-duty).
+
+   0.70 Hz is the figure for a LOADED leg, taking 400 deg/s as what the servo
+   manages against the robot's weight. Unloaded on a stand it will do half
+   again as much, so the bench will take more than this. Raise it with "freq"
+   and watch the rate the status line reports, but treat anything found with
+   the foot in the air as optimistic: the same trajectory under load will lag,
+   and a servo that cannot keep up does not say so. It simply stops following
+   the commanded path, which on the ground means scuffing at touchdown. */
+static float max_gait_hz = 0.70f;
+static const float FREQ_CEILING = 2.0f;
+
+/* From the calibration: 646.1 us/rad, so this many microseconds per degree of
+   the servo's own rotation, whatever linkage sits after it. Used to report the
+   rate each servo is actually being asked for. */
+static const float US_PER_SERVO_DEG = 646.1f / 57.29578f;
 
 static const uint16_t PWM_HZ = 100;        /* calibration is specific to this */
 static const uint8_t  PCA_ADDR = 0x40;
@@ -80,6 +93,14 @@ static float ramp_left = 0.0f;             /* seconds of slew-limited approach *
 static float last_deg[3] = { 0, 0, 0 };
 static uint32_t ik_fails = 0, clamp_hits = 0;
 static uint16_t step_cost_us = 0, loop_hz = 0;
+
+/* Peak rate demanded of each servo, in degrees per second of its own shaft,
+   held over the last second. Nothing on this robot can measure what a servo
+   actually did, so this is the demand side only: compare it against roughly
+   600 deg/s unloaded and 400 loaded. */
+static float peak_rate[3] = { 0, 0, 0 }, rate_acc[3] = { 0, 0, 0 };
+static float prev_us[3];
+static bool  have_prev = false;
 
 /* ------------------------------------------------------------------- i2c */
 
@@ -149,6 +170,15 @@ static void control_step(float dt)
     last_deg[1] = degrees(t2);
     last_deg[2] = degrees(t3);
 
+    if (have_prev && dt > 1e-6f) {
+        for (uint8_t c = 0; c < 3; c++) {
+            const float r = fabsf(want[c] - prev_us[c]) / dt / US_PER_SERVO_DEG;
+            if (r > rate_acc[c]) rate_acc[c] = r;
+        }
+    }
+    for (uint8_t c = 0; c < 3; c++) prev_us[c] = want[c];
+    have_prev = true;
+
     for (uint8_t c = 0; c < 3; c++) {
         if (ramp_left > 0.0f) {
             /* Slew-limited only while standing up. During the gait the
@@ -174,9 +204,11 @@ static void set_speed(float pct)
         /* Ramp stride and frequency together with commanded speed, as section
            5.3 asks. Both scale, so body speed goes as the square of the
            command and the low end stays controllable. */
+        /* Stride keeps a floor so the low end is a slow walk rather than a
+           shuffle. Frequency scales all the way down. */
         const float k = speed_pct / 100.0f;
-        stride_cmd = BASE.stride * k;
-        freq_cmd   = MAX_GAIT_HZ * k;
+        stride_cmd = BASE.stride * (0.45f + 0.55f * k);
+        freq_cmd   = max_gait_hz * k;
     }
 }
 
@@ -198,6 +230,13 @@ static void status(void)
     Serial.print(F(" Hz, step costs ")); Serial.print(step_cost_us);
     Serial.print(F(" us of the ")); Serial.print(STEP_US);
     Serial.println(F(" us budget"));
+    Serial.print(F("  peak servo rate  roll ")); Serial.print(peak_rate[0], 0);
+    Serial.print(F("  pitch ")); Serial.print(peak_rate[1], 0);
+    Serial.print(F("  knee ")); Serial.print(peak_rate[2], 0);
+    Serial.print(F(" deg/s   (about 600 unloaded, 400 loaded)"));
+    if (peak_rate[0] > 600.0f || peak_rate[1] > 600.0f || peak_rate[2] > 600.0f)
+        Serial.print(F("  <-- OVER"));
+    Serial.println();
     Serial.print(F("  ik failures ")); Serial.print(ik_fails);
     Serial.print(F(", limit hits ")); Serial.println(clamp_hits);
 }
@@ -242,11 +281,25 @@ static void command(char *s)
         Serial.print(F(" Hz  ->  ")); Serial.print(stride_cmd * freq_cmd, 0);
         Serial.println(F(" mm/s of body speed"));
 
+    } else if (!strcmp(s, "freq") && arg) {
+        max_gait_hz = constrain((float)atof(arg), 0.0f, FREQ_CEILING);
+        freq_cmd = max_gait_hz * (speed_pct / 100.0f);
+        Serial.print(F("full speed is now ")); Serial.print(max_gait_hz, 2);
+        Serial.println(F(" Hz. Watch the peak rate in status."));
+
+    } else if (!strcmp(s, "stride") && arg) {
+        stride_cmd = constrain((float)atof(arg), 0.0f, BASE.stride);
+        Serial.print(F("stride ")); Serial.print(stride_cmd, 0);
+        Serial.println(F(" mm. 90 is the most this leg reaches."));
+
     } else if (!strcmp(s, "status")) {
         status();
 
     } else if (!strcmp(s, "?") || !strcmp(s, "help")) {
-        Serial.println(F("stand / walk / stop / off / speed <0-100> / status"));
+        Serial.println(F("stand / walk / stop / off / status"));
+        Serial.println(F("speed <0-100>   scales stride and frequency together"));
+        Serial.println(F("freq <hz>       what speed 100 means, up to 2.0"));
+        Serial.println(F("stride <mm>     override the stride, up to 90"));
 
     } else if (*s) {
         Serial.print(F("unknown: ")); Serial.println(s);
@@ -268,6 +321,11 @@ void setup()
 
     pwm.begin();
     pwm.setPWMFreq(PWM_HZ);
+    /* Three servo writes per tick is most of the step cost at the 100 kHz
+       default, and twelve of them will not fit in the budget at all. The
+       PCA9685 is good for 1 MHz; 400 kHz is the safe, universally supported
+       step up. */
+    Wire.setClock(400000);
     release_all();
 
     Serial.print(F("PWM ")); Serial.print(PWM_HZ);
@@ -276,7 +334,7 @@ void setup()
     Serial.print(F("stride ")); Serial.print(BASE.stride, 0);
     Serial.print(F(" mm, stance ")); Serial.print(BASE.stance_h, 0);
     Serial.print(F(" mm, neutral ")); Serial.print(BASE.neutral_s, 0);
-    Serial.print(F(" mm, max ")); Serial.print(MAX_GAIT_HZ, 2);
+    Serial.print(F(" mm, max ")); Serial.print(max_gait_hz, 2);
     Serial.println(F(" Hz"));
     Serial.println(F("All channels released. Type stand, then walk."));
 }
@@ -308,5 +366,9 @@ void loop()
         loops++;
     }
 
-    if (millis() - sec_mark >= 1000) { sec_mark = millis(); loop_hz = loops; loops = 0; }
+    if (millis() - sec_mark >= 1000) {
+        sec_mark = millis();
+        loop_hz = loops; loops = 0;
+        for (uint8_t c = 0; c < 3; c++) { peak_rate[c] = rate_acc[c]; rate_acc[c] = 0.0f; }
+    }
 }

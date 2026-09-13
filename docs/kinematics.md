@@ -560,6 +560,21 @@ transcendental calls plus square roots and the trajectory's `sin` and `cos`.
 Target 100 Hz, fall back to 50 Hz. Below 50 Hz the motion starts to look
 stepped regardless of how good the trajectory is.
 
+**Measured on the board.** One leg at 100 Hz costs **3.64 ms** of the 10 ms
+budget, so the estimate above was pessimistic and the loop has room. That is
+the whole step: foot path, IK, the belt mapping, the calibration table and
+three servo writes.
+
+The part that does not scale is the I2C. Three `setPWM` calls at the 100 kHz
+default are roughly 1.6 ms of that 3.64, and twelve of them would be 6.5 ms
+before any arithmetic. Four legs would therefore be about 8 ms of maths plus
+6.5 ms of bus, which does not fit. Raising the bus to 400 kHz brings the twelve
+writes down to about 1.6 ms and the total to roughly 9.6 ms, which does. The
+PCA9685 will take 1 MHz if it comes to that.
+
+So the ceiling on this robot is not the AVR's floating point, which was the
+worry. It is the I2C bus, and it is fixed with one line.
+
 ### The servos are slower than the loop, and that is the real speed limit
 
 The DS3230 PRO manages 0.11 s/60 degrees at 5 V and 0.09 at 6.8 V, so about
@@ -809,4 +824,11 @@ On hardware:
 - Which PCA9685 channel drives which joint on the bench leg, and whether that
   leg is front right or rear right. The channel map in `design.md` assumes
   roll, pitch, knee in that order.
-- Measured cost of a transcendental call on the Mega, which sets the loop rate.
+- ~~Measured cost of a transcendental call on the Mega, which sets the loop
+  rate.~~ Measured indirectly: one leg costs 3.64 ms per tick at 100 Hz,
+  including three I2C writes. See section 7. The binding constraint turns out
+  to be the bus rather than the arithmetic.
+- What the servos manage unloaded against loaded. The gait ceiling of 0.70 Hz
+  assumes 400 deg/s under load, which is an estimate, not a measurement. The
+  walk firmware reports the peak rate it is demanding of each servo so the two
+  can be compared.
