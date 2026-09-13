@@ -703,6 +703,56 @@ Record the per-joint mechanical travel limits at the same time and enforce them
 in software. Enforce them on the **servo** angle, after the linkage and belt
 mappings, never on the joint angle.
 
+### Measured, front right leg
+
+| Ch | Joint | `zero_us` | `us_per_rad` | `min_us` | `max_us` |
+|---|---|---|---|---|---|
+| 0 | hip roll | 1650.0 | +646.1 | 1349 | 1951 |
+| 1 | hip pitch | 1986.3 | +700.7 | 1100 | **1770** |
+| 2 | knee | 185.3 | +646.1 | 850 | 2070 |
+
+Three things follow from these numbers that were not obvious beforehand.
+
+**The servos run 1.5 percent faster than the datasheet.** The knee slope
+divided by the belt ratio gives the scale of the servo itself, `1292.3 / 2 =
+646.1 us/rad` against a nominal 636.6. Well within unit tolerance, and a better
+figure than the datasheet for all three.
+
+**The hip pitch linkage is not 1:1.** Against that 646.1, its slope of 700.7
+implies a gain of 0.922: the thigh moves 92 percent of the servo's rotation. A
+true parallelogram would be exactly 1:1, so the arms are not quite equal. It
+stays linear, which is what matters, and the worst residual over the sweep was
+0.80 degrees, so the calibration absorbs it completely. That residual is now
+the dominant error in the leg.
+
+**`zero_us` for the knee is outside the pulse range, and that is correct.** The
+knee is tabulated against `q3`, and `q3 = 0` is a pose the leg cannot reach, so
+185 us is the intercept of a line rather than a pulse anything commands.
+
+### The hip pitch stop, and what it costs
+
+1770 us is a hard mechanical stop. It caps the thigh at -17.7 degrees, which is
+only 22 degrees forward of the neutral stance against 33 degrees behind it, so
+the usable travel is badly off centre and the gait cannot have the symmetric
+swing it would like.
+
+Moving the **neutral foot position 12 mm behind the hip pitch axis** re-centres
+the travel in what is available, and buys back most of what the stop costs:
+
+| Neutral foot | Max stride at 125 mm stance |
+|---|---|
+| below the pitch axis | 70 mm |
+| 12 mm behind it | **90 mm** |
+
+Stance height matters more than it looks. At 112 or 118 mm no stride fits at
+all, because lifting the foot 30 mm during swing folds the knee past the 2070
+us limit. 125 mm is the sweet spot, and it is also the 78 percent of full reach
+that section 2 wants for other reasons.
+
+At a 90 mm stride the cycle peaks at 87 percent of full extension, a little
+past the 85 percent guideline but well clear of the singularity, and no servo
+limit is touched anywhere in the cycle.
+
 This table is a crude version of the same correction the learned IK model would
 provide, so how large the residual error is after calibration is the number that
 tells you whether the learned layer is worth building.
