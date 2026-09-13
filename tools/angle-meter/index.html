@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quadrudog joint angle meter</title>
+<style>
+  :root {
+    --bg:     #0d0d0d;
+    --panel:  #161616;
+    --line:   #2b2b2b;
+    --text:   #e8e8e8;
+    --dim:    #8a8a8a;
+    --orange: #ff7a1a;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, Arial, sans-serif;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 2px;
+    color: var(--orange);
+    letter-spacing: 0.02em;
+  }
+  .sub { color: var(--dim); margin: 0 0 18px; font-size: 13px; }
+
+  .cols { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 14px;
+  }
+  #stage { position: relative; line-height: 0; }
+  canvas { display: block; max-width: 100%; background: #000; cursor: crosshair; }
+
+  .side { width: 340px; flex: 1 1 320px; }
+
+  h2 {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .readout { border-top: 1px solid var(--line); padding: 10px 0; }
+  .readout:first-of-type { border-top: 0; }
+  .rowtop { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .name { font-size: 13px; }
+  .swatch {
+    display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    vertical-align: baseline; border: 1px solid #000;
+  }
+  .val {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-variant-numeric: tabular-nums;
+    color: var(--orange);
+  }
+  .val.stale { color: #5a5a5a; }
+  .meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .cmd {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--dim);
+    background: #000;
+    border: 1px solid var(--line);
+    padding: 3px 7px;
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .steady { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .steady.ok { color: #5fbf5f; }
+  .steady.bad { color: var(--orange); }
+
+  button, select, input[type=number] {
+    font: inherit;
+    background: #000;
+    color: var(--text);
+    border: 1px solid var(--line);
+    padding: 4px 9px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--orange); color: var(--orange); }
+  button.primary { border-color: var(--orange); color: var(--orange); }
+  input[type=number] { width: 74px; font-family: var(--mono); }
+  label { color: var(--dim); font-size: 12.5px; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+
+  details { margin-top: 14px; }
+  summary {
+    cursor: pointer; color: var(--dim); font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;
+    padding: 6px 0;
+  }
+  summary:hover { color: var(--orange); }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; font-size: 12.5px; }
+  th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  td input[type=range] { width: 100%; accent-color: var(--orange); }
+  td.num { font-family: var(--mono); color: var(--dim); width: 44px; }
+
+  .note { color: var(--dim); font-size: 12.5px; margin: 10px 0 0; }
+  .note b { color: var(--text); font-weight: 600; }
+  code { font-family: var(--mono); color: var(--orange); font-size: 12.5px; }
+  #err { color: var(--orange); font-family: var(--mono); font-size: 12.5px; }
+</style>
+</head>
+<body>
+
+<h1>Quadrudog joint angle meter</h1>
+<p class="sub">Green at the hip pitch axis, yellow at the knee, blue at the foot.
+Point the camera square at the leg plane.</p>
+
+<div class="controls">
+  <button id="start" class="primary">Start camera</button>
+  <select id="cam"></select>
+  <label><input type="checkbox" id="mirror"> mirror</label>
+  <label><input type="checkbox" id="flip"> forward is left</label>
+  <span id="err"></span>
+</div>
+
+<div class="cols">
+  <div class="panel" id="stage">
+    <canvas id="view" width="640" height="480"></canvas>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h2>Angles</h2>
+
+      <div class="readout" id="r-t2">
+        <div class="rowtop">
+          <span class="name"><i class="swatch" style="background:#3fbf5f"></i>thigh, from straight down</span>
+          <span class="val">--</span>
+        </div>
+        <div class="meta">
+          <span class="cmd">pt --</span>
+          <button data-copy>copy</button>
+          <span class="steady">--</span>
+        </div>
+      </div>
+
+      <div class="readout" id="r-shank">
+        <div class="rowtop">
+          <span class="name"><i class="swatch" style="background:#e3c020"></i>shank, from straight down</span>
+          <span class="val">--</span>
+        </div>
+        <div class="meta">
+          <span class="cmd">pt --</span>
+          <button data-copy>copy</button>
+          <span class="steady">--</span>
+        </div>
+      </div>
+
+      <div class="readout" id="r-t3">
+        <div class="rowtop">
+          <span class="name">t3, knee: shank minus thigh</span>
+          <span class="val">--</span>
+        </div>
+        <div class="meta">
+          <span class="cmd">pt --</span>
+          <button data-copy>copy</button>
+          <span class="steady">--</span>
+        </div>
+      </div>
+
+      <div class="readout" id="r-leg">
+        <div class="rowtop">
+          <span class="name"><i class="swatch" style="background:#3f7fd0"></i>hip to foot, whole leg</span>
+          <span class="val">--</span>
+        </div>
+        <div class="meta">
+          <span class="cmd">pt --</span>
+          <button data-copy>copy</button>
+          <span class="steady">--</span>
+        </div>
+      </div>
+
+      <p class="note"><b>t3 is the difference of two angles</b>, so camera roll
+      cancels out of it entirely. The other three are absolute and only mean
+      something once the vertical reference below is set.</p>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>Vertical reference</h2>
+      <div class="controls" style="margin:0">
+        <label>roll offset</label>
+        <input type="number" id="roll" value="0" step="0.1">
+        <label>deg</label>
+        <button id="pickvert">Set by drawing a line</button>
+        <button id="zerovert">Reset</button>
+      </div>
+      <p class="note" id="verthint">Drag on the video along something you know
+      is vertical, a plumb line or a door frame, and the offset is taken from
+      it.</p>
+    </div>
+
+    <details>
+      <summary>Marker tuning</summary>
+      <p class="note">Click a dot in the video to take its hue directly. Widen
+      the tolerance until the marker tracks without picking up anything else.</p>
+      <table id="tune"></table>
+      <p class="note">Pixels found: <span id="counts" style="font-family:var(--mono)">--</span></p>
+    </details>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const COLORS = [
+  { key: "green",  label: "green, hip pitch", css: "#3fbf5f", h: 120, tol: 40, smin: 0.28, vmin: 0.18 },
+  { key: "yellow", label: "yellow, knee",     css: "#e3c020", h: 50,  tol: 18, smin: 0.38, vmin: 0.35 },
+  { key: "blue",   label: "blue, foot",       css: "#3f7fd0", h: 215, tol: 40, smin: 0.28, vmin: 0.18 },
+];
+
+const MIN_PIXELS = 12;      /* below this the marker counts as lost */
+const STEP = 2;             /* sample every Nth pixel in each direction */
+const EMA = 0.3;            /* centroid smoothing */
+const HIST = 18;            /* frames used to judge steadiness */
+
+const video  = document.createElement("video");
+video.playsInline = true; video.muted = true;
+const canvas = document.getElementById("view");
+const ctx    = canvas.getContext("2d", { willReadFrequently: true });
+
+const el = {
+  start: document.getElementById("start"),
+  cam:   document.getElementById("cam"),
+  mirror:document.getElementById("mirror"),
+  flip:  document.getElementById("flip"),
+  err:   document.getElementById("err"),
+  roll:  document.getElementById("roll"),
+  counts:document.getElementById("counts"),
+};
+
+const found = {};                 /* key -> {x, y} smoothed, or null */
+const history = {};               /* readout id -> array of recent values */
+let running = false;
+let pickTarget = null;            /* colour key awaiting a click */
+let vertDrag = null;              /* {x0,y0,x1,y1} while drawing the reference */
+let vertMode = false;
+
+/* ----------------------------------------------------------- marker tuning */
+
+const tune = document.getElementById("tune");
+tune.innerHTML = "<tr><th>marker</th><th>hue</th><th>tol</th><th>sat min</th><th>val min</th></tr>";
+COLORS.forEach((c, i) => {
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    '<td><i class="swatch" style="background:' + c.css + '"></i>' + c.label +
+    ' <button data-pick="' + c.key + '" style="padding:1px 6px;font-size:11px">pick</button></td>' +
+    '<td><input type="range" min="0" max="359" value="' + c.h + '" data-f="h" data-i="' + i + '"><span class="num"></span></td>' +
+    '<td><input type="range" min="4" max="80" value="' + c.tol + '" data-f="tol" data-i="' + i + '"><span class="num"></span></td>' +
+    '<td><input type="range" min="0" max="100" value="' + (c.smin * 100) + '" data-f="smin" data-i="' + i + '"><span class="num"></span></td>' +
+    '<td><input type="range" min="0" max="100" value="' + (c.vmin * 100) + '" data-f="vmin" data-i="' + i + '"><span class="num"></span></td>';
+  tune.appendChild(tr);
+});
+tune.addEventListener("input", e => {
+  const t = e.target;
+  if (!t.dataset.f) return;
+  const c = COLORS[+t.dataset.i], f = t.dataset.f;
+  c[f] = (f === "smin" || f === "vmin") ? +t.value / 100 : +t.value;
+  syncTuneLabels();
+});
+tune.addEventListener("click", e => {
+  if (e.target.dataset.pick) {
+    pickTarget = e.target.dataset.pick;
+    el.err.textContent = "click the " + pickTarget + " dot in the video";
+  }
+});
+function syncTuneLabels() {
+  tune.querySelectorAll("input[type=range]").forEach(r => {
+    const c = COLORS[+r.dataset.i], f = r.dataset.f;
+    r.value = (f === "smin" || f === "vmin") ? c[f] * 100 : c[f];
+    r.nextElementSibling.textContent =
+      (f === "smin" || f === "vmin") ? c[f].toFixed(2) : Math.round(c[f]);
+  });
+}
+syncTuneLabels();
+
+/* ----------------------------------------------------------------- camera */
+
+async function listCameras() {
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const cams = devs.filter(d => d.kind === "videoinput");
+    el.cam.innerHTML = "";
+    cams.forEach((d, i) => {
+      const o = document.createElement("option");
+      o.value = d.deviceId;
+      o.textContent = d.label || ("camera " + (i + 1));
+      el.cam.appendChild(o);
+    });
+  } catch (e) { /* labels need permission first, which is fine */ }
+}
+
+async function start() {
+  el.err.textContent = "";
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    el.err.textContent = "no camera API. Serve this over http://localhost, not file://";
+    return;
+  }
+  try {
+    const id = el.cam.value;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: id ? { deviceId: { exact: id }, width: 960, height: 720 }
+                : { width: 960, height: 720 },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    running = true;
+    el.start.textContent = "Restart camera";
+    listCameras();
+    requestAnimationFrame(loop);
+  } catch (e) {
+    el.err.textContent = "camera failed: " + e.message;
+  }
+}
+el.start.addEventListener("click", start);
+el.cam.addEventListener("change", () => { if (running) start(); });
+listCameras();
+
+/* --------------------------------------------------------------- detection */
+
+function hueDist(a, b) {
+  let d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+function detect(img) {
+  const d = img.data, w = img.width, h = img.height;
+  const acc = COLORS.map(() => ({ x: 0, y: 0, n: 0 }));
+
+  for (let y = 0; y < h; y += STEP) {
+    let i = y * w * 4;
+    for (let x = 0; x < w; x += STEP, i += 4 * STEP) {
+      const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+      const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      if (mx < 0.12) continue;
+      const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const df = mx - mn;
+      const s = df / mx;
+      if (s < 0.15) continue;
+
+      let hh;
+      if (df === 0) hh = 0;
+      else if (mx === r) hh = 60 * (((g - b) / df) % 6);
+      else if (mx === g) hh = 60 * (((b - r) / df) + 2);
+      else              hh = 60 * (((r - g) / df) + 4);
+      if (hh < 0) hh += 360;
+
+      for (let c = 0; c < COLORS.length; c++) {
+        const C = COLORS[c];
+        if (s >= C.smin && mx >= C.vmin && hueDist(hh, C.h) <= C.tol) {
+          acc[c].x += x; acc[c].y += y; acc[c].n++;
+          break;
+        }
+      }
+    }
+  }
+
+  COLORS.forEach((C, c) => {
+    const a = acc[c];
+    if (a.n < MIN_PIXELS) { found[C.key] = null; return; }
+    const p = { x: a.x / a.n, y: a.y / a.n };
+    const prev = found[C.key];
+    found[C.key] = prev ? { x: prev.x + (p.x - prev.x) * EMA,
+                            y: prev.y + (p.y - prev.y) * EMA } : p;
+  });
+  el.counts.textContent = COLORS.map((C, c) => C.key + " " + acc[c].n).join("   ");
+}
+
+/* ------------------------------------------------------------------ angles */
+
+/* Angle of a vector from straight down, in degrees, corrected for camera roll
+   and for which way the robot faces. Image y runs downwards, so "down" is +y. */
+function angleFromDown(from, to) {
+  if (!from || !to) return null;
+  let dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (el.flip.checked) dx = -dx;
+  let a = Math.atan2(dx, dy) * 180 / Math.PI - (+el.roll.value || 0);
+  while (a > 180) a -= 360;
+  while (a < -180) a += 360;
+  return a;
+}
+
+function pushHistory(id, v) {
+  const a = history[id] || (history[id] = []);
+  a.push(v);
+  if (a.length > HIST) a.shift();
+  if (a.length < HIST) return null;
+  return Math.max.apply(null, a) - Math.min.apply(null, a);
+}
+
+function setReadout(id, value) {
+  const box = document.getElementById(id);
+  const val = box.querySelector(".val");
+  const cmd = box.querySelector(".cmd");
+  const st  = box.querySelector(".steady");
+
+  if (value === null || !isFinite(value)) {
+    val.textContent = "--"; val.classList.add("stale");
+    cmd.textContent = "pt --";
+    st.textContent = "marker lost"; st.className = "steady bad";
+    history[id] = [];
+    return;
+  }
+  val.classList.remove("stale");
+  val.textContent = value.toFixed(1);
+  cmd.textContent = "pt " + value.toFixed(1);
+
+  const spread = pushHistory(id, value);
+  if (spread === null) { st.textContent = "settling"; st.className = "steady"; }
+  else if (spread < 0.4) { st.textContent = "steady +/-" + (spread / 2).toFixed(2); st.className = "steady ok"; }
+  else { st.textContent = "moving +/-" + (spread / 2).toFixed(2); st.className = "steady bad"; }
+}
+
+document.querySelectorAll("[data-copy]").forEach(b => {
+  b.addEventListener("click", () => {
+    const text = b.parentElement.querySelector(".cmd").textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const old = b.textContent; b.textContent = "copied";
+      setTimeout(() => { b.textContent = old; }, 900);
+    });
+  });
+});
+
+/* -------------------------------------------------------------- vertical */
+
+const stage = document.getElementById("stage");
+document.getElementById("pickvert").addEventListener("click", () => {
+  vertMode = true;
+  el.err.textContent = "drag along something vertical";
+});
+document.getElementById("zerovert").addEventListener("click", () => {
+  el.roll.value = 0;
+});
+
+function canvasPos(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) * canvas.width / r.width,
+           y: (ev.clientY - r.top) * canvas.height / r.height };
+}
+
+canvas.addEventListener("mousedown", ev => {
+  const p = canvasPos(ev);
+  if (vertMode) { vertDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; return; }
+  if (pickTarget) {
+    const img = ctx.getImageData(Math.round(p.x), Math.round(p.y), 1, 1).data;
+    const r = img[0] / 255, g = img[1] / 255, b = img[2] / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), df = mx - mn;
+    let hh = 0;
+    if (df !== 0) {
+      if (mx === r) hh = 60 * (((g - b) / df) % 6);
+      else if (mx === g) hh = 60 * (((b - r) / df) + 2);
+      else hh = 60 * (((r - g) / df) + 4);
+      if (hh < 0) hh += 360;
+    }
+    const C = COLORS.find(c => c.key === pickTarget);
+    C.h = Math.round(hh);
+    C.smin = Math.max(0.15, (mx === 0 ? 0 : df / mx) * 0.6);
+    C.vmin = Math.max(0.12, mx * 0.5);
+    syncTuneLabels();
+    el.err.textContent = "";
+    pickTarget = null;
+  }
+});
+canvas.addEventListener("mousemove", ev => {
+  if (!vertDrag) return;
+  const p = canvasPos(ev);
+  vertDrag.x1 = p.x; vertDrag.y1 = p.y;
+});
+canvas.addEventListener("mouseup", () => {
+  if (!vertDrag) return;
+  const dx = vertDrag.x1 - vertDrag.x0, dy = vertDrag.y1 - vertDrag.y0;
+  if (Math.hypot(dx, dy) > 20) {
+    /* The line the user drew is vertical in the real world, so whatever angle
+       it makes with image-down is the camera's roll. */
+    let a = Math.atan2(dy > 0 ? dx : -dx, Math.abs(dy)) * 180 / Math.PI;
+    el.roll.value = a.toFixed(1);
+  }
+  vertDrag = null; vertMode = false; el.err.textContent = "";
+});
+
+/* ------------------------------------------------------------------- draw */
+
+function drawOverlay() {
+  const g = found.green, y = found.yellow, b = found.blue;
+
+  ctx.lineWidth = 2;
+  if (g && y) { ctx.strokeStyle = "#3fbf5f"; line(g, y); }
+  if (y && b) { ctx.strokeStyle = "#e3c020"; line(y, b); }
+  if (g && b) { ctx.strokeStyle = "rgba(63,127,208,0.55)"; ctx.setLineDash([6, 5]); line(g, b); ctx.setLineDash([]); }
+
+  COLORS.forEach(C => {
+    const p = found[C.key];
+    if (!p) return;
+    ctx.strokeStyle = C.css; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, 6.284); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p.x - 16, p.y); ctx.lineTo(p.x + 16, p.y);
+    ctx.moveTo(p.x, p.y - 16); ctx.lineTo(p.x, p.y + 16); ctx.stroke();
+  });
+
+  /* vertical reference, drawn through the middle so it can be eyeballed */
+  const roll = (+el.roll.value || 0) * Math.PI / 180;
+  ctx.strokeStyle = "rgba(255,122,26,0.5)";
+  ctx.setLineDash([4, 6]); ctx.lineWidth = 1;
+  const cx = canvas.width / 2, cy = canvas.height / 2, L = canvas.height;
+  ctx.beginPath();
+  ctx.moveTo(cx - Math.sin(roll) * L / 2, cy - Math.cos(roll) * L / 2);
+  ctx.lineTo(cx + Math.sin(roll) * L / 2, cy + Math.cos(roll) * L / 2);
+  ctx.stroke(); ctx.setLineDash([]);
+
+  if (vertDrag) {
+    ctx.strokeStyle = "#ff7a1a"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(vertDrag.x0, vertDrag.y0);
+    ctx.lineTo(vertDrag.x1, vertDrag.y1); ctx.stroke();
+  }
+}
+function line(a, b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+
+/* ------------------------------------------------------------------- loop */
+
+function loop() {
+  if (!running) return;
+  if (video.readyState >= 2) {
+    ctx.save();
+    if (el.mirror.checked) { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    detect(ctx.getImageData(0, 0, canvas.width, canvas.height));
+
+    const g = found.green, y = found.yellow, b = found.blue;
+    const thigh = angleFromDown(g, y);
+    const shank = angleFromDown(y, b);
+    setReadout("r-t2", thigh);
+    setReadout("r-shank", shank);
+    setReadout("r-t3", (thigh === null || shank === null) ? null : shank - thigh);
+    setReadout("r-leg", angleFromDown(g, b));
+
+    drawOverlay();
+  }
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>

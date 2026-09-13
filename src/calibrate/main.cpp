@@ -72,7 +72,7 @@ struct Channel {
 
 static Channel ch[NUM_CH];
 static uint8_t sel = 0;
-static uint16_t pwm_hz = 50;
+static uint16_t pwm_hz = 100;
 static unsigned long last_slew;
 static bool watching = false;
 

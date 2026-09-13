@@ -644,13 +644,30 @@ faces. The magnitude does not. A knee that fits near 636 rather than 1273 would
 mean the belt is not 2:1 after all, so the calibration re-confirms the gearing
 for free.
 
-**Choose the PWM frequency before calibrating, not after.** The servo's dead
-band is 3 us, or 0.27 degrees, and that is the floor on repeatability no matter
-what the driver does. The PCA9685 quantises to `1e6 / (4096 * f)` microseconds
-per count, which equals the dead band at 81 Hz. Below that the driver is the
-limiting factor; above it the servo is. At the 50 Hz default a count is 4.88 us,
-or 0.44 degrees, which is noticeably coarser than the servo can hold. Run at
-100 Hz or more and the driver stops being the constraint.
+**The PWM frequency is 100 Hz**, and it is chosen before calibrating rather
+than after, because every number in the table is specific to it.
+
+Three things pull on that choice, and the PCA9685 is none of them. It will do
+40 Hz to 1 kHz; the servo and the control loop decide.
+
+- *Resolution.* The driver has 12 bits per period, so a count is
+  `1e6 / (4096 * f)` microseconds. Shorter period, finer steps. But the servo's
+  3 us dead band is 0.27 degrees and no driver resolution beats it, so there is
+  nothing to gain past the point where a count is smaller than that. The two
+  cross at 81 Hz. At the 50 Hz default a count is 4.88 us, or 0.44 degrees,
+  which is visibly coarser than the servo can hold; at 100 Hz it is 0.22, and
+  the driver stops being the constraint.
+- *Latency.* A servo can only act on a new pulse once per period, so the
+  command it is following is up to one period old: 20 ms at 50 Hz, 10 ms at
+  100. There is little point running the control loop at 100 Hz and then
+  delivering the result at 50.
+- *Heat.* A higher update rate means the servo corrects itself more often, and
+  a digital servo hunting around its setpoint draws current doing it. Twelve of
+  them makes that the power problem in `design.md`, so faster is not free.
+
+100 Hz sits where the resolution has stopped mattering, the latency matches the
+loop, and nothing is being driven harder than it needs to be. Going to 333 Hz
+would halve the latency again but buys no precision and costs heat.
 
 Rather than setting `zero_us` from one pose and `us_per_rad` from a second,
 **sweep and fit**: record eight to ten (pulse, measured angle) pairs across the
