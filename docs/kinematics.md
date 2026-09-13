@@ -111,10 +111,19 @@ No joint needs more than 62 degrees, so a standard 180 degree servo has ample
 room. Set `min_us` and `max_us` in section 8 from these ranges plus a margin,
 not from the servo's full travel.
 
-These are *joint* angles. The knee servo sees `q3 = t2 + ks*t3/N` instead, and
-with `N = 1/2` that is a travel of 103 degrees, not 62. The hip pitch servo sees
-whatever the pushrod inversion gives. Limits are enforced on the servo angles,
-not on these, and the knee is the joint with the least margin.
+These are *joint* angles. The hip roll and hip pitch servos see them directly,
+one being driven on its axis and the other through a parallelogram. The knee
+servo does not: it sees `q3 = t2 + ks*t3/N`, and with `N = 1/2` that is a travel
+of **103 degrees**, not 62. In pulse width, at 11.111 us/deg:
+
+| Joint | Servo travel | Pulse span | Centred on 1500 us |
+|---|---|---|---|
+| hip roll | 46 deg | 512 us | 1244 to 1756 |
+| hip pitch | 56 deg | 619 us | 1191 to 1809 |
+| knee | 103 deg | 1149 us | 926 to 2074 |
+
+Limits are enforced on the servo angles, not on the joint angles, and the knee
+is the joint with the least margin by a wide margin of its own.
 
 **Stride limit.** At the 125 mm nominal stance, straight-line strides stay
 inside the 85 percent band up to about 100 mm. Beyond that the foot passes 86
@@ -400,15 +409,26 @@ trajectory that is already smooth.
 The hip pitch joint is driven through a pushrod, so **servo angle is not joint
 angle** and IK produces the latter. Something has to sit between them.
 
-**If the linkage is a parallelogram** (horn arm and thigh arm equal length,
-pushrod parallel to the line between pivots), the mapping is `servo = joint + k`
-and there is nothing to do beyond calibration. Confirm this in CAD before
-assuming it.
+**It is a parallelogram.** Horn arm and thigh arm are equal length and the
+pushrod is parallel to the line between the pivots, so equal servo steps give
+equal joint steps across the whole range:
 
-**Otherwise** the mapping is nonlinear: equal servo steps give unequal joint
-steps, with gain varying across the range. Invert it with a circle-circle
-intersection, which is cleaner than the Freudenstein equation here because the
-pushrod's far end position is already known once IK has given the joint angle.
+    q2 = t2 + k
+
+and `k` is a constant that `zero_us` in section 8 absorbs completely. There is
+nothing to invert and nothing to compute. The hip pitch servo angle *is* the
+thigh angle, offset.
+
+This answers open mechanical question 2 in `design.md` and removes the only
+nonlinear mapping the firmware would have had. Two of the three joints are now
+trivial and the third, the knee, is linear as well.
+
+**If it had not been a parallelogram** the mapping would have been nonlinear,
+with gain varying across the range, and would have needed inverting. The
+circle-circle solution below is kept for reference, and because the hip roll or
+a future revision of the frame might still need it. It is cleaner than the
+Freudenstein equation here because the pushrod's far end position is already
+known once IK has given the joint angle.
 
 ```c
 /* A: servo pivot, fixed, in leg-plane coordinates
@@ -505,10 +525,15 @@ perfectly reachable as a joint angle can demand a `q3` the servo cannot deliver,
 because `q3` carries the thigh's contribution as well.
 
     leg_ik -> t1, t2, t3          pure geometry, no mechanism
-    hip pitch:  q2 = horn_angle(t2)    section 6, pushrod, nonlinear
+    hip roll:   q1 = t1                direct drive
+    hip pitch:  q2 = t2                parallelogram, offset absorbed by zero_us
     knee:       q3 = t2 + ks*t3/N      belt, linear
-    clamp q2, q3 to the mechanical limits
+    clamp q1, q2, q3 to the mechanical limits
     pulse = cal[j].zero_us + ...       section 8
+
+Only the knee line does any work. The other two are the identity, because the
+hip roll is driven directly on its axis and the hip pitch linkage is a
+parallelogram.
 
 Keeping the IK free of all of this is deliberate. The geometry is a property of
 the robot's dimensions; the coupling is a property of how it happens to be
@@ -534,6 +559,44 @@ transcendental calls plus square roots and the trajectory's `sin` and `cos`.
 
 Target 100 Hz, fall back to 50 Hz. Below 50 Hz the motion starts to look
 stepped regardless of how good the trajectory is.
+
+### The servos are slower than the loop, and that is the real speed limit
+
+The DS3230 PRO manages 0.11 s/60 degrees at 5 V and 0.09 at 6.8 V, so about
+600 deg/s no-load on the 6 V rail. Under load expect somewhere between half and
+two thirds of that, so budget against roughly 400 deg/s.
+
+The knee is the joint that runs out first, because the 2:1 belt that doubled its
+torque also doubled its speed demand. Peak demand falls in the swing phase,
+where the foot has to catch up while off the ground, and it scales as
+`stride * frequency / (1 - duty)`. That last term has a consequence worth
+knowing: **crawl is harder on the servo than trot at the same frequency**,
+because a duty of 0.75 leaves only a quarter of the cycle to swing in.
+
+Maximum gait frequency, and the body speed that follows from it:
+
+| Stride | Trot, duty 0.50 | Crawl, duty 0.75 |
+|---|---|---|
+| 40 mm | 1.18 Hz, 47 mm/s | 0.61 Hz, 24 mm/s |
+| 60 mm | 0.96 Hz, 58 mm/s | 0.53 Hz, 32 mm/s |
+| 80 mm | 0.77 Hz, 62 mm/s | 0.45 Hz, 36 mm/s |
+| 100 mm | 0.63 Hz, 63 mm/s | 0.38 Hz, 38 mm/s |
+
+Taken against the 400 deg/s loaded budget. At the no-load 600 the figures are
+half again as large, but designing to no-load speed is designing for a robot
+with its feet in the air.
+
+Two things follow. Body speed barely improves past a 60 mm stride, because
+lengthening the stride forces the frequency down almost in proportion, so there
+is no point commanding long strides. And the speed ceiling is a property of the
+servos, not of the control loop, so a faster loop rate will not buy speed. It
+buys smoothness, which is a different thing.
+
+Ramp `gait_freq` with commanded speed as section 5.3 says, but clamp it to the
+row above for whichever stride is in use, and clamp it harder in crawl than in
+trot. A servo asked to move faster than it can simply lags, which turns the
+carefully continuous foot path into something else entirely, and the first
+symptom is feet scuffing at touchdown.
 
 Keep the pure math free of Arduino headers so `test/` can compile it with g++ on
 the host. Every formula in this document can be regression-tested without
@@ -562,6 +625,32 @@ places to express one sign is two places to get it wrong.
 
 Run `pio run -e calibrate -t upload` and drive it over the serial monitor at
 115200. Everything starts released, so nothing moves until you say so.
+
+The servo gives 180 degrees over 500 to 2500 us, neutral at 1500, so
+
+    11.111 us/deg   =   636.6 us/rad
+
+which predicts what each fit should come out at, and gives you a way to catch a
+bad one:
+
+| Joint | Drive | Expected `us_per_rad` |
+|---|---|---|
+| hip roll | direct | 636.6 |
+| hip pitch | parallelogram, 1:1 | 636.6 |
+| knee, against joint angle `t3` | 2:1 belt | 1273.2 |
+
+The sign of each depends on how the horn was mounted and which way the servo
+faces. The magnitude does not. A knee that fits near 636 rather than 1273 would
+mean the belt is not 2:1 after all, so the calibration re-confirms the gearing
+for free.
+
+**Choose the PWM frequency before calibrating, not after.** The servo's dead
+band is 3 us, or 0.27 degrees, and that is the floor on repeatability no matter
+what the driver does. The PCA9685 quantises to `1e6 / (4096 * f)` microseconds
+per count, which equals the dead band at 81 Hz. Below that the driver is the
+limiting factor; above it the servo is. At the 50 Hz default a count is 4.88 us,
+or 0.44 degrees, which is noticeably coarser than the servo can hold. Run at
+100 Hz or more and the driver stops being the constraint.
 
 Rather than setting `zero_us` from one pose and `us_per_rad` from a second,
 **sweep and fit**: record eight to ten (pulse, measured angle) pairs across the
@@ -645,5 +734,12 @@ On hardware:
   the three joints and the one to check first on the bench.
 - Whether the `l1` link has a fore-aft component that must be handled as a fixed
   translation rather than as `l1`.
-- Servo model, pulse range, and maximum PWM frequency not yet recorded.
+- ~~Servo model, pulse range, and maximum PWM frequency not yet recorded.~~
+  DS3230 PRO, 180 degree variant, 500 to 2500 us, recorded in `design.md`.
+  Maximum PWM frequency is still unstated by the datasheet; 100 Hz is enough to
+  make the driver finer than the servo's dead band, so there is little reason to
+  push it. Stall current is still unknown and the power budget needs it.
+- Which PCA9685 channel drives which joint on the bench leg, and whether that
+  leg is front right or rear right. The channel map in `design.md` assumes
+  roll, pitch, knee in that order.
 - Measured cost of a transcendental call on the Mega, which sets the loop rate.

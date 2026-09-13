@@ -37,6 +37,11 @@ static const uint8_t MAX_PT = 10;
 static const uint16_t DEFAULT_LO_US = 1000;
 static const uint16_t DEFAULT_HI_US = 2000;
 
+/* DS3230 PRO, 180 degree variant: 180 deg over 500 to 2500 us, neutral 1500,
+   dead band 3 us. Used only to report positions in degrees, never to command.
+   The fitted table is what the firmware uses. */
+static const float US_PER_DEG = 2000.0f / 180.0f;
+
 /* Approach every commanded position at this rate rather than jumping. A servo
    asked to cross its range instantly will try, and a loaded leg slamming into
    a stop strips horns. */
@@ -169,6 +174,8 @@ static void show(void)
     Serial.print(F("ch ")); Serial.print(sel);
     Serial.print(k.driven ? F("  DRIVEN  ") : F("  off     "));
     Serial.print(k.cur_us, 0); Serial.print(F(" us"));
+    Serial.print(F(" = ")); Serial.print((k.cur_us - 1500.0f) / US_PER_DEG, 1);
+    Serial.print(F(" deg from neutral"));
     Serial.print(F("  (target ")); Serial.print(k.tgt_us, 0);
     Serial.print(F(", limits ")); Serial.print(k.lo_us);
     Serial.print(F(" to ")); Serial.print(k.hi_us);
@@ -338,8 +345,17 @@ void setup()
     Serial.print(F(" Hz, ")); Serial.print(us_per_count(), 2);
     Serial.println(F(" us per count"));
     Serial.println(F("All channels released. Nothing moves until you say \"on\"."));
-    Serial.println(F("Channel map: 0 hip roll, 1 hip pitch, 2 knee, for the"));
-    Serial.println(F("front left leg. See docs/design.md section 3."));
+    Serial.println(F("\nDS3230 PRO 180 deg: 500-2500 us, neutral 1500, 11.111 us/deg,"));
+    Serial.println(F("dead band 3 us = 0.27 deg. Expected fits, sign depending on"));
+    Serial.println(F("how the horn went on:"));
+    Serial.println(F("  hip roll  direct        us_per_rad ~  637"));
+    Serial.println(F("  hip pitch parallelogram us_per_rad ~  637"));
+    Serial.println(F("  knee      2:1 belt      us_per_rad ~ 1273  (against joint t3)"));
+    Serial.println(F("\nSoft limits start at 1000-2000 us, which is only 90 deg and is"));
+    Serial.println(F("NOT enough for the knee. That one needs about 1150 us of span."));
+    Serial.println(F("Find its stops by hand first, then widen with \"range\"."));
+    Serial.println(F("\nIdentify each channel before trusting the map: select it, turn"));
+    Serial.println(F("it on, jog 30 us, and watch which joint moves."));
     help();
 }
 

@@ -116,12 +116,35 @@ Two things about this board are easy to get wrong:
 
 ### Servos
 
-Twelve waterproof digital servos, 30 kg-cm class. Unchanged from the original
-plan.
+Twelve DSservo **DS3230 PRO**, the 180 degree variant.
 
-Open item: the exact model and its rated pulse width range, maximum PWM
-frequency, and stall current must be recorded here before calibration. All three
-numbers matter.
+| | |
+|---|---|
+| Torque | 28.5 kg-cm at 5 V, 38 kg-cm at 6.8 V |
+| Speed, no load | 0.11 s/60 deg at 5 V, 0.09 s/60 deg at 6.8 V |
+| Travel | 180 +/- 3 deg over 500 to 2500 us |
+| Neutral | 1500 us, counter-clockwise over 1000 to 2000 us |
+| Dead band | 3 us, which is 0.27 deg |
+| Supply | 4.8 to 6.8 V |
+| Horn | 25 tooth, 5.9 mm |
+| Bearings | 2BB |
+| Mass | 58 g each |
+| Sealing | IP66 |
+
+Derived: 2000 us over 180 degrees is **11.111 us/deg**, or 636.6 us/rad. On the
+6 V rail, roughly 33 kg-cm and about 600 deg/s unloaded.
+
+Twelve at 58 g is 696 g of servo alone, which matches the 700 g estimate in the
+open questions below.
+
+Two numbers from this drive decisions elsewhere. The 3 us dead band is the floor
+on repeatability, and it sets the PWM frequency worth running; see
+`kinematics.md` section 8. The no-load speed sets the maximum gait frequency,
+and because the knee is geared 2:1 it is the joint that runs out first; see
+`kinematics.md` section 7.
+
+Still open: stall current, which the datasheet does not give and which the power
+budget needs.
 
 A note on torque and power that is often stated backwards: a higher torque
 rating does not by itself mean higher current draw under the same load. What it
@@ -272,10 +295,10 @@ tabulated in `kinematics.md` section 2.
    intent is not reachable with these pulleys. Because a belt is linear the
    correction is still a single term, far cheaper than the pushrod inversion
    this question anticipated. See `kinematics.md` section 6.
-2. Is the hip pitch linkage a parallelogram? If the horn arm and the thigh arm
-   are equal length and the pushrod is parallel to the pivot-to-pivot line, the
-   mapping is 1:1 plus a constant and needs no inversion at all. Worth designing
-   for deliberately if the frame can still be changed.
+2. ~~Is the hip pitch linkage a parallelogram?~~ **Answered: yes.** Servo angle
+   change equals thigh angle change, so the mapping is `q2 = t2 + k` with `k` a
+   constant that `zero_us` absorbs. No inversion is needed, and the firmware
+   loses its only nonlinear mapping.
 3. Total mass, and therefore whether the 30 kg servos have adequate margin at
    the worst-case stance. Twelve servos alone is roughly 700 g before frame,
    battery, and electronics. Heavier robot means more holding torque needed,
