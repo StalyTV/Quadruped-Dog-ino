@@ -52,14 +52,18 @@ static const Gait BASE = { 90.0f, 0.50f, 30.0f, 125.0f, -12.0f };
    doubled its torque also doubled its speed demand, and peak demand falls in
    swing, scaling as stride*frequency/(1-duty).
 
-   0.70 Hz is the figure for a LOADED leg, taking 400 deg/s as what the servo
-   manages against the robot's weight. Unloaded on a stand it will do half
-   again as much, so the bench will take more than this. Raise it with "freq"
-   and watch the rate the status line reports, but treat anything found with
-   the foot in the air as optimistic: the same trajectory under load will lag,
-   and a servo that cannot keep up does not say so. It simply stops following
-   the commanded path, which on the ground means scuffing at touchdown. */
-static float max_gait_hz = 0.70f;
+   Measured on the bench: at 1.00 Hz and a 90 mm stride the knee is being asked
+   for 612 deg/s, already past what the servo manages unloaded. So the unloaded
+   ceiling is about 0.98 Hz, and scaling by the 400 deg/s a loaded servo
+   manages gives 0.65. That was estimated at 0.70 before any of this ran, so
+   the estimate held.
+
+   Raise it with "freq" and watch the rate status reports, but treat anything
+   found with the foot in the air as optimistic. The same trajectory under load
+   will lag, and a servo that cannot keep up does not say so: it simply stops
+   following the commanded path, which on the ground shows as scuffing at
+   touchdown. */
+static float max_gait_hz = 0.65f;
 static const float FREQ_CEILING = 2.0f;
 
 /* From the calibration: 646.1 us/rad, so this many microseconds per degree of
@@ -197,18 +201,21 @@ static void control_step(float dt)
 
 /* ---------------------------------------------------------------- command */
 
+/* What a commanded speed works out to. Section 5.3 asks for stride and
+   frequency to ramp together with speed. Stride keeps a floor under it so the
+   low end is a slow walk rather than a shuffle; frequency scales all the way
+   down. */
+static float stride_for(float pct) { return BASE.stride * (0.45f + 0.55f * pct / 100.0f); }
+static float freq_for(float pct)   { return max_gait_hz * pct / 100.0f; }
+
 static void set_speed(float pct)
 {
     speed_pct = constrain(pct, 0.0f, 100.0f);
+    /* Only walking commands a stride. Setting the speed while stood still
+       records the intent, for the next walk to apply. */
     if (state == WALKING) {
-        /* Ramp stride and frequency together with commanded speed, as section
-           5.3 asks. Both scale, so body speed goes as the square of the
-           command and the low end stays controllable. */
-        /* Stride keeps a floor so the low end is a slow walk rather than a
-           shuffle. Frequency scales all the way down. */
-        const float k = speed_pct / 100.0f;
-        stride_cmd = BASE.stride * (0.45f + 0.55f * k);
-        freq_cmd   = max_gait_hz * k;
+        stride_cmd = stride_for(speed_pct);
+        freq_cmd   = freq_for(speed_pct);
     }
 }
 
@@ -275,11 +282,13 @@ static void command(char *s)
 
     } else if (!strcmp(s, "speed") && arg) {
         set_speed((float)atof(arg));
+        const float st = stride_for(speed_pct), fr = freq_for(speed_pct);
         Serial.print(F("speed ")); Serial.print(speed_pct, 0);
-        Serial.print(F("%  stride ")); Serial.print(stride_cmd, 0);
-        Serial.print(F(" mm  freq ")); Serial.print(freq_cmd, 2);
-        Serial.print(F(" Hz  ->  ")); Serial.print(stride_cmd * freq_cmd, 0);
-        Serial.println(F(" mm/s of body speed"));
+        Serial.print(F("%  stride ")); Serial.print(st, 0);
+        Serial.print(F(" mm  freq ")); Serial.print(fr, 2);
+        Serial.print(F(" Hz  ->  ")); Serial.print(st * fr, 0);
+        Serial.print(F(" mm/s"));
+        Serial.println(state == WALKING ? F("") : F("   (applied when you walk)"));
 
     } else if (!strcmp(s, "freq") && arg) {
         max_gait_hz = constrain((float)atof(arg), 0.0f, FREQ_CEILING);

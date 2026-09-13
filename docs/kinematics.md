@@ -565,15 +565,21 @@ budget, so the estimate above was pessimistic and the loop has room. That is
 the whole step: foot path, IK, the belt mapping, the calibration table and
 three servo writes.
 
-The part that does not scale is the I2C. Three `setPWM` calls at the 100 kHz
-default are roughly 1.6 ms of that 3.64, and twelve of them would be 6.5 ms
-before any arithmetic. Four legs would therefore be about 8 ms of maths plus
-6.5 ms of bus, which does not fit. Raising the bus to 400 kHz brings the twelve
-writes down to about 1.6 ms and the total to roughly 9.6 ms, which does. The
-PCA9685 will take 1 MHz if it comes to that.
+Raising the bus from the 100 kHz default to 400 kHz took that to **2.57 ms**.
+The 1.07 ms saved is three quarters of what the writes cost, so the arithmetic
+is about 2.2 ms per leg and the three writes are 1.43 ms at 100 kHz or 0.36 at
+400.
 
-So the ceiling on this robot is not the AVR's floating point, which was the
-worry. It is the I2C bus, and it is fixed with one line.
+Four legs then works out at roughly 8.9 ms of arithmetic plus 1.4 ms of bus,
+call it **10.3 ms**, which is marginally over the budget at 100 Hz. Three ways
+out, in order of preference: take the bus to 1 MHz, which the PCA9685 supports
+and which buys another 1.1 ms; drop the control rate to 50 Hz, which doubles
+the budget and is still above the point where motion looks stepped; or attack
+the arithmetic with a sin/cos table.
+
+Worth noting what this overturns. The concern all along was the AVR's software
+floating point. It is real but it is not the binding constraint, and at one leg
+the bus cost more than the maths did.
 
 ### The servos are slower than the loop, and that is the real speed limit
 
@@ -828,7 +834,10 @@ On hardware:
   rate.~~ Measured indirectly: one leg costs 3.64 ms per tick at 100 Hz,
   including three I2C writes. See section 7. The binding constraint turns out
   to be the bus rather than the arithmetic.
-- What the servos manage unloaded against loaded. The gait ceiling of 0.70 Hz
-  assumes 400 deg/s under load, which is an estimate, not a measurement. The
-  walk firmware reports the peak rate it is demanding of each servo so the two
-  can be compared.
+- What the servos manage under load. The demand side is now measured: at 1.00
+  Hz and a 90 mm stride the knee is asked for 612 deg/s, the hip pitch for 381,
+  and the hip roll for nothing, since this gait does not abduct. The knee binds
+  first exactly as the 2:1 belt predicts. That puts the unloaded ceiling near
+  0.98 Hz and, scaled by the 400 deg/s a loaded servo manages, 0.65 Hz loaded,
+  against the 0.70 estimated beforehand. What a servo actually delivers under
+  load is still unmeasured, and cannot be measured with PWM servos at all.
