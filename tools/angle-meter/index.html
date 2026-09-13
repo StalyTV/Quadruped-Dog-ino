@@ -209,6 +209,18 @@ Point the camera square at the leg plane.</p>
       <p class="note" id="verthint">Drag on the video along something you know
       is vertical, a plumb line or a door frame, and the offset is taken from
       it.</p>
+
+      <div class="controls" style="margin:12px 0 0">
+        <button id="tiltperm">Use the phone as a level</button>
+        <label><input type="checkbox" id="tiltuse"> track it</label>
+        <label><input type="checkbox" id="tiltinv"> invert</label>
+      </div>
+      <p class="note">Tilt <span id="tiltval" style="font-family:var(--mono);color:var(--orange)">--</span>
+      <span id="tiltwarn" style="font-family:var(--mono)"></span></p>
+      <p class="note">This corrects <b>roll only</b>, which is the rotation of
+      the picture. It cannot tell whether the camera is square to the leg plane,
+      and that is the larger error when holding the phone by hand. Check the
+      sign once against a drawn line; if it moves the wrong way, tick invert.</p>
     </div>
 
     <details>
@@ -587,6 +599,75 @@ canvas.addEventListener("mouseup", () => {
   vertDrag = null; vertMode = false; el.err.textContent = "";
 });
 
+/* --------------------------------------------------- phone as a spirit level */
+
+/* The accelerometer reports which way is down. Projected onto the screen plane
+   that gives the roll of the picture, which is exactly the vertical reference
+   the absolute angles need. It says nothing about whether the camera is square
+   to the leg plane, and that is the bigger error by hand, so this is a
+   convenience rather than a substitute for propping the phone up. */
+let tilt = null;
+
+function screenAngleDeg() {
+  const so = window.screen && window.screen.orientation;
+  if (so && typeof so.angle === "number") return so.angle;
+  if (typeof window.orientation === "number") return (360 + window.orientation) % 360;
+  return 0;
+}
+
+function onMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x === null || g.x === undefined) return;
+
+  const mag = Math.hypot(g.x, g.y, g.z);
+  let roll = Math.atan2(g.x, g.y) * 180 / Math.PI - screenAngleDeg();
+  while (roll > 180) roll -= 360;
+  while (roll < -180) roll += 360;
+
+  if (!tilt) { tilt = { roll: roll, mag: mag }; return; }
+  /* Smooth along the shortest arc, so a reading either side of the wrap does
+     not drag the average the long way round. */
+  let d = roll - tilt.roll;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  tilt.roll += d * 0.12;
+  tilt.mag  += (mag - tilt.mag) * 0.12;
+}
+
+document.getElementById("tiltperm").addEventListener("click", async () => {
+  try {
+    if (typeof DeviceMotionEvent !== "undefined" &&
+        typeof DeviceMotionEvent.requestPermission === "function") {
+      const r = await DeviceMotionEvent.requestPermission();   /* iOS 13+ */
+      if (r !== "granted") { el.err.textContent = "motion access refused"; return; }
+    }
+    window.addEventListener("devicemotion", onMotion);
+    document.getElementById("tiltuse").checked = true;
+    el.err.textContent = "";
+  } catch (e) {
+    el.err.textContent = "no motion sensor: " + e.message;
+  }
+});
+
+function updateTilt() {
+  const out = document.getElementById("tiltval");
+  const warn = document.getElementById("tiltwarn");
+  if (!tilt) { out.textContent = "--"; warn.textContent = ""; return; }
+
+  const inv = document.getElementById("tiltinv").checked;
+  const roll = inv ? -tilt.roll : tilt.roll;
+  out.textContent = roll.toFixed(1) + " deg";
+
+  /* A phone at rest reads one g. Anything else means it is being moved, and
+     the tilt it reports is contaminated by that movement rather than being
+     gravity alone. */
+  const off = Math.abs(tilt.mag - 9.81);
+  warn.textContent = off > 0.6 ? "  moving, reading unreliable" : "";
+  warn.style.color = off > 0.6 ? "var(--orange)" : "var(--dim)";
+
+  if (document.getElementById("tiltuse").checked) el.roll.value = roll.toFixed(1);
+}
+
 /* ------------------------------------------------------------------- draw */
 
 function drawOverlay() {
@@ -635,6 +716,7 @@ function loop() {
     ctx.restore();
 
     detect(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    updateTilt();
 
     const g = found.green, y = found.yellow, b = found.blue;
     const thigh = angleFromDown(g, y);
