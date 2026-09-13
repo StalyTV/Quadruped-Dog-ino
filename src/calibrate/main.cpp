@@ -44,8 +44,10 @@ static const float US_PER_DEG = 2000.0f / 180.0f;
 
 /* Approach every commanded position at this rate rather than jumping. A servo
    asked to cross its range instantly will try, and a loaded leg slamming into
-   a stop strips horns. */
-static const float SLEW_US_PER_S = 300.0f;
+   a stop strips horns. Turn it right down with "creep" when hunting for a
+   mechanical limit, so that a joint which stops tracking has not already been
+   pushed hard into whatever stopped it. */
+static float slew_us_per_s = 300.0f;
 
 static const float SAFE_US = 1500.0f;
 
@@ -72,6 +74,7 @@ static Channel ch[NUM_CH];
 static uint8_t sel = 0;
 static uint16_t pwm_hz = 50;
 static unsigned long last_slew;
+static bool watching = false;
 
 /* ------------------------------------------------------------------ output */
 
@@ -203,6 +206,8 @@ static void help(void)
         "clear        drop every point on this channel\n"
         "fit          least squares -> zero_us, us_per_rad, residual\n"
         "list         list this channel's points\n"
+        "creep <n>    slew rate in us/s. Drop to ~20 to hunt for a stop.\n"
+        "watch        report position while moving, to spot a stalled joint\n"
         "freq <hz>    set the PWM frequency. Invalidates every fit.\n"
         "show         state of the selected channel\n"
         "dump         print the whole table as C\n"));
@@ -307,6 +312,16 @@ static void command(char *s)
         Serial.println(F("the real pulse width, so the whole table must be"));
         Serial.println(F("measured again at the frequency you intend to run."));
 
+    } else if (!strcmp(s, "creep") && arg) {
+        slew_us_per_s = constrain((float)atof(arg), 5.0f, 2000.0f);
+        Serial.print(F("slew ")); Serial.print(slew_us_per_s, 0);
+        Serial.print(F(" us/s = ")); Serial.print(slew_us_per_s / US_PER_DEG, 1);
+        Serial.println(F(" deg/s"));
+
+    } else if (!strcmp(s, "watch")) {
+        watching = !watching;
+        Serial.println(watching ? F("watch on") : F("watch off"));
+
     } else if (!strcmp(s, "show")) {
         show();
     } else if (!strcmp(s, "dump")) {
@@ -377,7 +392,7 @@ void loop()
     float dt = (now - last_slew) * 1e-6f;
     last_slew = now;
 
-    float step = SLEW_US_PER_S * dt;
+    float step = slew_us_per_s * dt;
     for (uint8_t c = 0; c < NUM_CH; c++) {
         if (!ch[c].driven) continue;
         if (ch[c].cur_us < ch[c].tgt_us)
@@ -385,5 +400,15 @@ void loop()
         else if (ch[c].cur_us > ch[c].tgt_us)
             ch[c].cur_us = max(ch[c].cur_us - step, ch[c].tgt_us);
         write_us(c, ch[c].cur_us);
+    }
+
+    /* While something is moving, report where it is. A joint that has met a
+       mechanical stop keeps taking pulse changes without moving, and seeing
+       the commanded figure run away from the joint is the cheapest stall
+       detector available without current sensing. */
+    static unsigned long last_report;
+    if (watching && millis() - last_report > 250) {
+        last_report = millis();
+        if (fabsf(ch[sel].cur_us - ch[sel].tgt_us) > 0.5f) show();
     }
 }
