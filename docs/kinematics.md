@@ -85,7 +85,7 @@ any of them changes.
 **Equal links simplify two things.** With `l2 == l3` the inner workspace bound
 `|l2 - l3|` is zero, so there is no unreachable region near the hip and the
 `D < fabs(l2 - l3)` test in section 4 can never fire. It also makes the stance
-triangle isoceles, so the thigh always bisects the knee: `t2 = t3/2` whenever
+triangle isoceles, so the thigh always bisects the knee: `t2 = -ks*t3/2` whenever
 the foot is directly below the pitch axis. That identity is worth using on the
 bench — set the knee, halve it for the hip.
 
@@ -94,7 +94,8 @@ bench — set the knee, halve it for the hip.
 | Maximum reach from the pitch axis, `l2 + l3` | 160 mm |
 | Usable stance band, 70 to 85 percent of reach | 112 to 136 mm |
 | Nominal stance height, 78 percent | 125 mm |
-| Joint angles at nominal stance | `t1 = 0`, `t2 = 38.7`, `t3 = 77.5` degrees |
+| Joint angles at nominal stance, `ks = +1` | `t1 = 0`, `t2 = -38.7`, `t3 = +77.5` degrees |
+| Shank absolute angle there | +38.7 degrees, down and forward |
 | Body height offset range about nominal | -13 to +11 mm |
 
 **Joint travel**, taken as the union over every stride direction at an 80 mm
@@ -103,12 +104,17 @@ stride, 30 mm step height, duty 0.5, from the nominal stance:
 | Joint | Range | Travel |
 |---|---|---|
 | `t1` | -21.5 to +24.6 deg | 46 deg |
-| `t2` | +13.0 to +68.7 deg | 56 deg |
+| `t2` | -68.6 to -13.0 deg | 56 deg |
 | `t3` | +49.7 to +111.5 deg | 62 deg |
 
 No joint needs more than 62 degrees, so a standard 180 degree servo has ample
 room. Set `min_us` and `max_us` in section 8 from these ranges plus a margin,
 not from the servo's full travel.
+
+These are *joint* angles. The knee servo sees `q3 = t2 + ks*t3/N` instead, which
+for `N` near `8/9` spans roughly +21 to +81 degrees, a travel of about 60. The
+hip pitch servo sees whatever the pushrod inversion gives. Limits are enforced
+on the servo angles, not on these.
 
 **Stride limit.** At the 125 mm nominal stance, straight-line strides stay
 inside the 85 percent band up to about 100 mm. Beyond that the foot passes 86
@@ -129,15 +135,24 @@ Given `t1, t2, t3`, the foot position in the leg frame:
     pz = l1*sin(t1)
 
     // planar 2-link chain, in the plane containing x and the rotated down axis
-    fx = l2*sin(t2) + l3*sin(t2 - t3)
-    fd = l2*cos(t2) + l3*cos(t2 - t3)     // along the rotated down direction
+    fx = l2*sin(t2) + l3*sin(t2 + ks*t3)
+    fd = l2*cos(t2) + l3*cos(t2 + ks*t3)  // along the rotated down direction
 
     x = fx
     y = py - fd*sin(t1)
     z = pz + fd*cos(t1)
 
-Note `t2 - t3` for the shank direction: flexion bends the knee backward relative
-to the thigh.
+`ks` is the knee direction, `+1` or `-1`, a per-leg constant fixed by how the
+frame is assembled. It is not a runtime choice.
+
+- `ks = +1` puts the knee rearward: the thigh runs down and back, the shank down
+  and forward. This is the Boston Dynamics silhouette, and it is what this robot
+  uses.
+- `ks = -1` is the human-like mirror, knee forward.
+
+`t3` stays non-negative either way, so "zero is straight, positive is more bent"
+holds for both. Only the direction the shank leaves the thigh changes. Earlier
+revisions hardcoded `t2 - t3`, which is the `ks = -1` case.
 
 ## 4. Inverse kinematics
 
@@ -164,13 +179,24 @@ cosines, one for the angle at the knee and one for the angle at the hip:
     D  = hypot(x, d)
     if (D > l2 + l3 || D < fabs(l2 - l3)) -> unreachable
     t3 = PI - acos( (l2*l2 + l3*l3 - D*D) / (2*l2*l3) )
-    t2 = atan2(x, d) + acos( (l2*l2 + D*D - l3*l3) / (2*l2*D) )
+    t2 = atan2(x, d) - ks*acos( (l2*l2 + D*D - l3*l3) / (2*l2*D) )
 
 `atan2(x, d)` aims the whole leg at the target; the `acos` term rotates the
-thigh off that line by however much the knee bend requires. Flipping that `+` to
-a `-` mirrors the knee, which is how front and rear legs get different knee
-directions if the frame calls for it. Pick per leg, store it as a constant, and
-never let it change at runtime.
+thigh off that line by however much the knee bend requires. The same `ks` from
+section 3 selects the knee direction, and it must be the same constant in both
+places.
+
+**A correction worth understanding.** Earlier revisions kept `t3 = PI - acos(..)`
+and claimed that flipping the sign in front of the second `acos` mirrors the
+knee. It does not. `PI - acos(..)` is non-negative by construction, so flipping
+only the `t2` term produces a pose that is not a solution to anything: it misses
+the commanded foot position by up to 159 mm on this geometry. Mirroring the knee
+requires changing the shank direction in the forward kinematics too, which is
+what threading `ks` through both does. With `ks` handled consistently the
+position round trip closes to 1.6e-13 mm in both directions.
+
+With `l2 == l3` the stance identity picks up the same sign: `t2 = -ks*t3/2`
+whenever the foot hangs directly below the pitch axis.
 
 ### Reference implementation
 
@@ -178,9 +204,11 @@ never let it change at runtime.
 typedef struct { float l1, l2, l3; } LegGeom;
 
 /* Returns false if the target is outside the workspace.
-   Angles are only written on success. */
+   Angles are only written on success.
+   ks is the knee direction, +1 rearward or -1 forward, and must match the
+   value used in the forward kinematics. */
 bool leg_ik(const LegGeom *g, float x, float y, float z,
-            int8_t knee_branch, float *t1, float *t2, float *t3)
+            int8_t ks, float *t1, float *t2, float *t3)
 {
     const float yz = hypotf(y, z);
     if (yz < g->l1) return false;
@@ -196,13 +224,22 @@ bool leg_ik(const LegGeom *g, float x, float y, float z,
     ch = fminf(1.0f, fmaxf(-1.0f, ch));      /* an out-of-range argument  */
 
     *t3 = (float)M_PI - acosf(ck);
-    *t2 = atan2f(x, d) + knee_branch * acosf(ch);
+    *t2 = atan2f(x, d) - ks * acosf(ch);
     return true;
 }
 ```
 
 This has been verified against the forward kinematics above over 20000 random
-reachable targets; the round trip closes to about 1e-13.
+reachable targets in each knee direction; the position round trip closes to
+about 1e-13.
+
+Note that it is the *position* round trip that closes. Feeding the returned
+angles back through the forward kinematics lands on the commanded foot point to
+float precision. The angles themselves occasionally differ from the ones the
+target was generated from, in roughly one case in two thousand, all of them
+near-folded poses at the edge of the workspace where two genuinely different
+joint triples reach the same point. That is the kinematics being ambiguous, not
+the solver being wrong.
 
 ### Two rules that are not optional
 
@@ -342,10 +379,14 @@ for (int i = 0; i < 4; i++) {
     Vec3 f = foot_path(p, cmd, i);      /* 5.2 and 5.3 */
     f = apply_body_pose(f, pose);       /* 5.4 */
     f = body_to_leg(f, i);              /* section 1 */
-    if (leg_ik(&geom, f.x, f.y, f.z, branch[i], &t1, &t2, &t3)) {
-        write_joint(i, 0, t1);
-        write_joint(i, 1, t2);          /* linkage inversion happens inside */
-        write_joint(i, 2, t3);
+    if (leg_ik(&geom, f.x, f.y, f.z, ks[i], &t1, &t2, &t3)) {
+        /* joint angles to servo angles, section 6. The knee needs t2 as
+           well as t3, because the belt couples it to the hip. */
+        float q2 = hip_servo_angle(t2);
+        float q3 = t2 + ks[i] * t3 / BELT_N;
+        write_servo(i, 0, t1);          /* hip roll is driven directly */
+        write_servo(i, 1, q2);
+        write_servo(i, 2, q3);
     }                                    /* on failure: hold previous pose */
 }
 ```
@@ -393,10 +434,65 @@ Pick `branch` once by checking which root matches the physical assembly. If it
 ever flips at runtime the linkage has passed through a toggle position and the
 leg will snap to a mirrored pose, so treat a flip as a fault.
 
-**Unresolved.** If the knee angle changes when the thigh sweeps with the knee
-servo held still, the joints are kinematically coupled and a correction term is
-needed here, between IK and the inversion. Determine this by sweeping the thigh
-in CAD and watching the knee. See `design.md`, open mechanical questions.
+### The knee is belt driven, and it is coupled to the hip
+
+This was listed as unresolved in earlier revisions: does the knee angle change
+when the thigh sweeps with the knee servo held still? It does. The knee is
+driven by a belt from a pulley at the hip pitch axis, with the thigh acting as
+the carrier, so the two joints are kinematically coupled by construction.
+
+The good news is that a belt is **exactly linear**, unlike the pushrod above.
+There is no circle-circle intersection, no branch, and no toggle position. The
+whole correction is one multiply and one add.
+
+Let `N` be the tooth ratio, driving pulley at the hip over driven pulley at the
+knee, and `q3` the knee servo angle measured in the same leg-plane reference as
+everything else. In the thigh's rotating frame the belt enforces
+`(phi_shank - t2) = N*(q3 - t2)`, so the shank's absolute angle is
+
+    phi_shank = (1 - N)*t2 + N*q3
+
+Setting that equal to the `phi_shank = t2 + ks*t3` of section 3 and solving:
+
+    t3 = ks*N*(q3 - t2)           joint angle from servo angle
+    q3 = t2 + ks*t3/N             servo angle from joint angle, the one to use
+
+Read the second line as: command the knee where the geometry wants it, then add
+back whatever the thigh's own motion has already contributed.
+
+**What `N = 1` would mean.** Equal pulleys give `q3 = phi_shank` exactly. The
+servo would then command the shank's absolute angle and the thigh could sweep
+freely underneath without disturbing it. That was the design intent, and it is
+worth knowing because it is the case every intuition about this mechanism is
+built on.
+
+**What the residual tells you.** Holding `q3` fixed, `d(phi_shank)/dt2` is
+`(1 - N)`. The measured drift is about 10 degrees of shank angle per 90 degrees
+of thigh sweep, so `|1 - N|` is about `1/9` and `N` is near `8/9` or `10/9`.
+Those correspond to a 16 and 18 tooth pair, either way round; 16/18 gives
+exactly 10.00 degrees per 90 and 20/18 gives exactly -10.00. The sign says which
+pulley is the larger.
+
+**Do not measure `N`, count it.** A belt ratio is a ratio of two integers and is
+therefore exact. Taking it off a protractor throws away that exactness for
+nothing: the knee error is roughly 0.9 degrees per one percent of error in `N`,
+and it is systematic rather than noisy, so it will not average out.
+
+**Order of operations.** The coupling sits between the IK and the calibration
+table, and the travel limits must be enforced *after* it. A `t3` that is
+perfectly reachable as a joint angle can demand a `q3` the servo cannot deliver,
+because `q3` carries the thigh's contribution as well.
+
+    leg_ik -> t1, t2, t3          pure geometry, no mechanism
+    hip pitch:  q2 = horn_angle(t2)    section 6, pushrod, nonlinear
+    knee:       q3 = t2 + ks*t3/N      belt, linear
+    clamp q2, q3 to the mechanical limits
+    pulse = cal[j].zero_us + ...       section 8
+
+Keeping the IK free of all of this is deliberate. The geometry is a property of
+the robot's dimensions; the coupling is a property of how it happens to be
+driven. Mixing them makes both harder to test, and the IK is the half that can
+be checked on the host without hardware.
 
 ## 7. Loop rate and compute budget
 
@@ -480,8 +576,13 @@ On hardware:
   binding one: without it there is no turning, and no way to work out how far
   the body can lean before a leg runs out of reach.
 - Linkage geometry (pivot, horn radius, pushrod length, attachment) not yet
-  recorded.
-- Knee/thigh coupling unknown.
+  recorded, for the hip pitch pushrod.
+- ~~Knee/thigh coupling unknown.~~ Resolved: the knee is belt driven off the hip
+  pitch axis, so the joints are coupled, linearly, by the tooth ratio `N`. See
+  section 6.
+- The exact value of `N`. The drift measurement puts it near `8/9` or `10/9`,
+  but it is a ratio of tooth counts and should be taken from those rather than
+  inferred. Both pulleys' tooth counts, and which one is the larger.
 - Whether the `l1` link has a fore-aft component that must be handled as a fixed
   translation rather than as `l1`.
 - Servo model, pulse range, and maximum PWM frequency not yet recorded.

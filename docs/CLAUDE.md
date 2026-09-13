@@ -17,12 +17,21 @@ kinematics doc before touching anything in `src/kinematics/` or `src/gait/`.
 - Link names: l1 hip roll axis to hip pitch axis, l2 thigh, l3 shank. All are
   axis-to-axis distances, never part-to-part.
 - Knee flexion t3 is measured from full extension, so t3 = 0 is a straight leg.
+  t3 is never negative. The knee points rearward (thigh down and back, shank
+  down and forward), which is the ks = +1 case, and ks is a per-leg compile-time
+  constant that appears in both the forward and the inverse kinematics.
+- Positive t1 swings the foot inward, toward the body centreline. The prose in
+  kinematics.md used to say outward; it was wrong.
 
 ## Pitfalls specific to this robot
 
-- Servo angle is not joint angle. The hip pitch joint is driven through a
-  pushrod linkage. IK outputs joint angles; something must invert the linkage
-  before a pulse width is computed. See `docs/kinematics.md`, section 6.
+- Servo angle is not joint angle, for either of the lower two joints. The hip
+  pitch runs through a pushrod, which is nonlinear and needs inverting. The knee
+  runs through a belt off the hip pitch axis, which means the knee servo command
+  depends on t2 as well as t3: q3 = t2 + ks*t3/N. Moving the hip moves the knee
+  even with the knee servo held still. See `docs/kinematics.md`, section 6.
+- Enforce travel limits on the servo angles, after that mapping, never on the
+  joint angles. A reachable t3 can still demand an unreachable q3.
 - Always clamp acos arguments to [-1, 1] and return a reachability flag. An
   unreachable target produces NaN, NaN becomes a garbage pulse width, and a
   garbage pulse width breaks a leg.

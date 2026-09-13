@@ -209,9 +209,22 @@ The hip roll axis runs fore-aft. Rotating it swings the whole leg outward and
 inward, like moving a leg sideways away from the body, and tilts the `l1` link
 up or down. It does not swing the leg forward or back.
 
-The hip pitch joint is driven through a pushrod linkage rather than being
-mounted directly on its axis, which keeps the servo mass close to the body. This
-has a firmware consequence: see `kinematics.md` section 6.
+The knee points **rearward**: the thigh runs down and back from the hip, and the
+shank down and forward to the foot. This is the Boston Dynamics silhouette
+rather than the human one, and it is the `ks = +1` case in `kinematics.md`
+sections 3 and 4. It is a property of the frame, so it is a compile-time
+constant per leg and never a runtime choice.
+
+Neither of the lower two joints is driven directly on its axis, which keeps the
+servo mass close to the body at the cost of a mapping between servo angle and
+joint angle:
+
+- **Hip pitch**, through a pushrod linkage. The mapping is nonlinear and needs
+  inverting; see `kinematics.md` section 6.
+- **Knee**, through a belt from a pulley at the hip pitch axis. The thigh is the
+  carrier, so moving the hip moves the knee even with the knee servo held still.
+  A belt is linear, so this correction is one multiply and one add rather than
+  the geometric inversion the pushrod needs.
 
 ### Measurements needed
 
@@ -242,11 +255,15 @@ tabulated in `kinematics.md` section 2.
 
 ### Open mechanical questions
 
-1. Does the knee angle change when the thigh sweeps with the knee servo held
-   still? In many remote-driven designs it does, because the knee pushrod's
-   effective geometry depends on thigh position. If so, the joints are
-   kinematically coupled and a correction term is needed after IK and before the
-   linkage inversion. Check by sweeping the thigh in CAD.
+1. ~~Does the knee angle change when the thigh sweeps with the knee servo held
+   still?~~ **Answered: yes.** The knee is driven by a belt from a pulley at the
+   hip pitch axis, with the thigh as the carrier, so the joints are coupled by
+   construction. The intent was a 1:1 ratio, which would have let the thigh
+   sweep without disturbing the shank's absolute angle, but the ratio is not
+   quite 1:1 and the shank drifts about 10 degrees per 90 degrees of thigh
+   sweep. Because a belt is linear the correction is a single term, far cheaper
+   than the pushrod inversion this question anticipated. See `kinematics.md`
+   section 6. Outstanding: the two pulleys' exact tooth counts.
 2. Is the hip pitch linkage a parallelogram? If the horn arm and the thigh arm
    are equal length and the pushrod is parallel to the pivot-to-pivot line, the
    mapping is 1:1 plus a constant and needs no inversion at all. Worth designing
