@@ -51,6 +51,9 @@ static float slew_us_per_s = 300.0f;
 
 static const float SAFE_US = 1500.0f;
 
+/* Default for the breakout with no address jumpers bridged. */
+static const uint8_t PCA_ADDR = 0x40;
+
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 
 struct Point {
@@ -75,6 +78,27 @@ static uint8_t sel = 0;
 static uint16_t pwm_hz = 100;
 static unsigned long last_slew;
 static bool watching = false;
+
+/* --------------------------------------------------------------------- i2c */
+
+static bool i2c_probe(uint8_t addr)
+{
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
+
+static void scan_bus(void)
+{
+    uint8_t n = 0;
+    for (uint8_t a = 1; a < 127; a++) {
+        if (!i2c_probe(a)) continue;
+        Serial.print(F("  device at 0x"));
+        if (a < 16) Serial.print('0');
+        Serial.println(a, HEX);
+        n++;
+    }
+    if (!n) Serial.println(F("  nothing answered on the bus"));
+}
 
 /* ------------------------------------------------------------------ output */
 
@@ -209,6 +233,7 @@ static void help(void)
         "creep <n>    slew rate in us/s. Drop to ~20 to hunt for a stop.\n"
         "watch        report position while moving, to spot a stalled joint\n"
         "freq <hz>    set the PWM frequency. Invalidates every fit.\n"
+        "scan         list what answers on the i2c bus\n"
         "show         state of the selected channel\n"
         "dump         print the whole table as C\n"));
 }
@@ -322,6 +347,10 @@ static void command(char *s)
         watching = !watching;
         Serial.println(watching ? F("watch on") : F("watch off"));
 
+    } else if (!strcmp(s, "scan")) {
+        Serial.println(F("scanning:"));
+        scan_bus();
+
     } else if (!strcmp(s, "show")) {
         show();
     } else if (!strcmp(s, "dump")) {
@@ -350,6 +379,22 @@ void setup()
         ch[c].fitted = false;
     }
 
+    /* Check the bus before driving anything. Without SDA and SCL the library
+       fails silently: every write goes nowhere, and the symptom is servos that
+       simply never move, which looks like a dozen other faults. */
+    Wire.begin();
+    if (i2c_probe(PCA_ADDR)) {
+        Serial.println(F("PCA9685 found at 0x40."));
+    } else {
+        Serial.println(F("\nPCA9685 NOT FOUND at 0x40. Nothing will move."));
+        Serial.println(F("  SDA goes to Mega pin 20, SCL to pin 21."));
+        Serial.println(F("  VCC needs 5 V from the Mega, and the grounds must be"));
+        Serial.println(F("  common. V+ is a separate rail for the servos.")); 
+        Serial.println(F("Scanning the bus:"));
+        scan_bus();
+        Serial.println();
+    }
+
     pwm.begin();
     pwm.setPWMFreq(pwm_hz);
     for (uint8_t c = 0; c < NUM_CH; c++) release(c);   /* nothing moves on boot */
@@ -371,6 +416,9 @@ void setup()
     Serial.println(F("Find its stops by hand first, then widen with \"range\"."));
     Serial.println(F("\nIdentify each channel before trusting the map: select it, turn"));
     Serial.println(F("it on, jog 30 us, and watch which joint moves."));
+    Serial.println(F("\nServos draw amps. They run from V+ on the terminal block, fed by"));
+    Serial.println(F("the UBEC, never from the Mega's 5 V. The two grounds must still"));
+    Serial.println(F("be tied together or the pulses have no reference."));
     help();
 }
 
