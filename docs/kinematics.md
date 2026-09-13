@@ -111,10 +111,10 @@ No joint needs more than 62 degrees, so a standard 180 degree servo has ample
 room. Set `min_us` and `max_us` in section 8 from these ranges plus a margin,
 not from the servo's full travel.
 
-These are *joint* angles. The knee servo sees `q3 = t2 + ks*t3/N` instead, which
-for `N` near `8/9` spans roughly +21 to +81 degrees, a travel of about 60. The
-hip pitch servo sees whatever the pushrod inversion gives. Limits are enforced
-on the servo angles, not on these.
+These are *joint* angles. The knee servo sees `q3 = t2 + ks*t3/N` instead, and
+with `N = 1/2` that is a travel of 103 degrees, not 62. The hip pitch servo sees
+whatever the pushrod inversion gives. Limits are enforced on the servo angles,
+not on these, and the knee is the joint with the least margin.
 
 **Stride limit.** At the 125 mm nominal stance, straight-line strides stay
 inside the 85 percent band up to about 100 mm. Beyond that the foot passes 86
@@ -466,17 +466,38 @@ freely underneath without disturbing it. That was the design intent, and it is
 worth knowing because it is the case every intuition about this mechanism is
 built on.
 
-**What the residual tells you.** Holding `q3` fixed, `d(phi_shank)/dt2` is
-`(1 - N)`. The measured drift is about 10 degrees of shank angle per 90 degrees
-of thigh sweep, so `|1 - N|` is about `1/9` and `N` is near `8/9` or `10/9`.
-Those correspond to a 16 and 18 tooth pair, either way round; 16/18 gives
-exactly 10.00 degrees per 90 and 20/18 gives exactly -10.00. The sign says which
-pulley is the larger.
+**The ratio is exactly 2:1.** The pulley at the hip, driven by the knee servo,
+has half the teeth of the pulley at the knee, so
 
-**Do not measure `N`, count it.** A belt ratio is a ratio of two integers and is
-therefore exact. Taking it off a protractor throws away that exactness for
-nothing: the knee error is roughly 0.9 degrees per one percent of error in `N`,
-and it is systematic rather than noisy, so it will not average out.
+    N = 1/2       exactly, being a ratio of tooth counts
+
+A belt ratio is a ratio of two integers, so it is exact and no measurement
+uncertainty enters. That matters: the knee error runs about 0.9 degrees per one
+percent of error in `N`, and because it scales with `t2` it is systematic rather
+than noisy, so an approximate value would never average out.
+
+**The coupling is therefore large, not small.** With `N = 1/2` the shank's
+absolute angle follows the thigh at half rate: sweep the thigh 90 degrees with
+the knee servo locked and the shank rotates 45 degrees. This is nowhere near the
+decoupled behaviour the design intended, and the intent is not reachable with
+these pulleys, since only `N = 1` holds the shank still.
+
+Confirmed against two photographs of the real leg taken roughly 90 degrees
+apart with the knee servo untouched. Reading the joint centres off them gives a
+thigh sweep of 91 degrees and a shank sweep of 42, so `1 - N = 0.46` against the
+0.50 that 2:1 predicts, the residual being the error in reading angles off a
+photograph. As a check, `q3 = t2 + ks*t3/N` evaluates to 49 and 42 degrees in
+the two shots; it should be identical, since the knee servo did not move, and
+the spread is the same reading error.
+
+**Consequence for servo travel.** Because the knee is geared down 2:1, the servo
+must sweep about twice the joint. Over a full gait cycle in every stride
+direction the knee joint covers 62 degrees, and the servo covers 103. That is
+still inside a 180 degree servo but it is much less margin than the other two
+joints have, and it makes the knee the joint most likely to run out of range.
+Check the travel limits on this one first. The compensation is that the same
+gearing doubles the torque at the knee and halves the effect of servo
+resolution error, both of which the knee needs more than the other joints do.
 
 **Order of operations.** The coupling sits between the IK and the calibration
 table, and the travel limits must be enforced *after* it. A `t3` that is
@@ -580,9 +601,11 @@ On hardware:
 - ~~Knee/thigh coupling unknown.~~ Resolved: the knee is belt driven off the hip
   pitch axis, so the joints are coupled, linearly, by the tooth ratio `N`. See
   section 6.
-- The exact value of `N`. The drift measurement puts it near `8/9` or `10/9`,
-  but it is a ratio of tooth counts and should be taken from those rather than
-  inferred. Both pulleys' tooth counts, and which one is the larger.
+- ~~The exact value of `N`.~~ Resolved: exactly `1/2`, the hip pulley having half
+  the teeth of the knee pulley. Confirmed against photographs of the real leg.
+- Whether the knee servo's 103 degrees of required travel fits inside its
+  mechanical limits once the zero position is chosen. This is the tightest of
+  the three joints and the one to check first on the bench.
 - Whether the `l1` link has a fore-aft component that must be handled as a fixed
   translation rather than as `l1`.
 - Servo model, pulse range, and maximum PWM frequency not yet recorded.

@@ -221,10 +221,16 @@ joint angle:
 
 - **Hip pitch**, through a pushrod linkage. The mapping is nonlinear and needs
   inverting; see `kinematics.md` section 6.
-- **Knee**, through a belt from a pulley at the hip pitch axis. The thigh is the
-  carrier, so moving the hip moves the knee even with the knee servo held still.
-  A belt is linear, so this correction is one multiply and one add rather than
-  the geometric inversion the pushrod needs.
+- **Knee**, through a toothed belt from a pulley at the hip pitch axis, with an
+  idler tensioning it partway along the thigh. The thigh is the carrier, so
+  moving the hip moves the knee even with the knee servo held still. The ratio
+  is 2:1 reduction, which doubles the torque at the knee and halves the effect
+  of servo resolution error, at the cost of the servo needing twice the joint's
+  travel. A belt is linear, so this correction is one multiply and one add
+  rather than the geometric inversion the pushrod needs.
+
+Servos are DS3230 PRO, 30 kg-cm class. Both the hip pitch and the knee servo sit
+at the hip, which is what keeps the moving mass low.
 
 ### Measurements needed
 
@@ -259,11 +265,13 @@ tabulated in `kinematics.md` section 2.
    still?~~ **Answered: yes.** The knee is driven by a belt from a pulley at the
    hip pitch axis, with the thigh as the carrier, so the joints are coupled by
    construction. The intent was a 1:1 ratio, which would have let the thigh
-   sweep without disturbing the shank's absolute angle, but the ratio is not
-   quite 1:1 and the shank drifts about 10 degrees per 90 degrees of thigh
-   sweep. Because a belt is linear the correction is a single term, far cheaper
-   than the pushrod inversion this question anticipated. See `kinematics.md`
-   section 6. Outstanding: the two pulleys' exact tooth counts.
+   sweep without disturbing the shank's absolute angle. The built ratio is
+   **2:1**, the hip pulley having half the teeth of the knee pulley, so the
+   shank instead follows the thigh at half rate: 90 degrees of thigh sweep moves
+   it 45 degrees. Only a 1:1 pair can hold the shank still, so the original
+   intent is not reachable with these pulleys. Because a belt is linear the
+   correction is still a single term, far cheaper than the pushrod inversion
+   this question anticipated. See `kinematics.md` section 6.
 2. Is the hip pitch linkage a parallelogram? If the horn arm and the thigh arm
    are equal length and the pushrod is parallel to the pivot-to-pivot line, the
    mapping is 1:1 plus a constant and needs no inversion at all. Worth designing
