@@ -71,6 +71,15 @@ struct Channel {
 
     bool     fitted;
     float    zero_us, us_per_rad, resid_deg;
+
+    /* A recorded point is stored as cpl_k + cpl_gain * whatever was typed.
+       Both default to pass-through. The knee needs them: what the rig can
+       measure is the joint angle t3, but what the table has to describe is the
+       servo angle q3 = t2 + ks*t3/N, so with the hip held at t2 the conversion
+       is a constant and a gain. Setting them here means the fit comes out as
+       the servo table directly, rather than as something needing arithmetic
+       afterwards. */
+    float    cpl_k, cpl_gain;
 };
 
 static Channel ch[NUM_CH];
@@ -207,6 +216,10 @@ static void show(void)
     Serial.print(F(", limits ")); Serial.print(k.lo_us);
     Serial.print(F(" to ")); Serial.print(k.hi_us);
     Serial.print(F(")  points ")); Serial.print(k.n);
+    if (k.cpl_k != 0.0f || k.cpl_gain != 1.0f) {
+        Serial.print(F("  [pt -> ")); Serial.print(k.cpl_k, 1);
+        Serial.print(F(" + ")); Serial.print(k.cpl_gain, 2); Serial.print(F("*x]"));
+    }
     if (k.fitted) {
         Serial.print(F("  fit: ")); Serial.print(k.zero_us, 1);
         Serial.print(F(" + ")); Serial.print(k.us_per_rad, 1);
@@ -226,6 +239,7 @@ static void help(void)
         "range <a> <b> set the soft travel limits\n"
         "lo / hi      record the current pulse as a travel limit\n"
         "pt <deg>     record the measured joint angle at this pulse\n"
+        "couple <k> <g>  store points as k + g*typed. Knee: couple -38.7 2\n"
         "undo         drop the last recorded point\n"
         "clear        drop every point on this channel\n"
         "fit          least squares -> zero_us, us_per_rad, residual\n"
@@ -300,13 +314,24 @@ static void command(char *s)
             Serial.println(F("still moving, wait for it to settle"));
             return;
         }
-        k.pt[k.n].angle_deg = (float)atof(arg);
+        k.pt[k.n].angle_deg = k.cpl_k + k.cpl_gain * (float)atof(arg);
         k.pt[k.n].us = (uint16_t)k.cur_us;
         k.n++;
         Serial.print(F("recorded ")); Serial.print(k.pt[k.n-1].us);
         Serial.print(F(" us at ")); Serial.print(k.pt[k.n-1].angle_deg, 2);
         Serial.print(F(" deg  (")); Serial.print(k.n);
         Serial.println(F(" points)"));
+
+    } else if (!strcmp(s, "couple") && arg) {
+        char *b = strchr(arg, ' ');
+        if (!b) { Serial.println(F("couple <offset_deg> <gain>")); return; }
+        *b++ = 0;
+        k.cpl_k = (float)atof(arg);
+        k.cpl_gain = (float)atof(b);
+        Serial.print(F("points on this channel now stored as "));
+        Serial.print(k.cpl_k, 2); Serial.print(F(" + "));
+        Serial.print(k.cpl_gain, 3); Serial.println(F(" * typed"));
+        if (k.n) Serial.println(F("existing points were stored under the old rule, clear them"));
 
     } else if (!strcmp(s, "undo")) {
         if (k.n) k.n--;
@@ -377,6 +402,8 @@ void setup()
         ch[c].tgt_us = SAFE_US;
         ch[c].driven = false;
         ch[c].fitted = false;
+        ch[c].cpl_k = 0.0f;
+        ch[c].cpl_gain = 1.0f;
     }
 
     /* Check the bus before driving anything. Without SDA and SCL the library
