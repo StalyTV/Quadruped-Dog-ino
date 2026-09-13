@@ -113,13 +113,18 @@
   .note { color: var(--dim); font-size: 12.5px; margin: 10px 0 0; }
   .note b { color: var(--text); font-weight: 600; }
   code { font-family: var(--mono); color: var(--orange); font-size: 12.5px; }
-  #err { color: var(--orange); font-family: var(--mono); font-size: 12.5px; }
+  /* Reserved height. The status text appears as you pick markers, and if it
+     reflowed the row the video would jump under the cursor mid-click. */
+  #err {
+    color: var(--orange); font-family: var(--mono); font-size: 12.5px;
+    display: block; width: 100%; min-height: 18px; margin: 2px 0 0;
+  }
 </style>
 </head>
 <body>
 
 <h1>Quadrudog joint angle meter</h1>
-<p class="sub">Green at the hip pitch axis, yellow at the knee, blue at the foot.
+<p class="sub">Green at the hip pitch axis, yellow at the knee, cyan at the foot.
 Point the camera square at the leg plane.</p>
 
 <div class="controls">
@@ -177,7 +182,7 @@ Point the camera square at the leg plane.</p>
 
       <div class="readout" id="r-leg">
         <div class="rowtop">
-          <span class="name"><i class="swatch" style="background:#3f7fd0"></i>hip to foot, whole leg</span>
+          <span class="name"><i class="swatch" style="background:#35c0d0"></i>hip to foot, whole leg</span>
           <span class="val">--</span>
         </div>
         <div class="meta">
@@ -208,8 +213,13 @@ Point the camera square at the leg plane.</p>
 
     <details>
       <summary>Marker tuning</summary>
-      <p class="note">Click a dot in the video to take its hue directly. Widen
-      the tolerance until the marker tracks without picking up anything else.</p>
+      <p class="note">Defaults are measured off the real rig, so they should
+      work as they are. If the light changes, click "pick" and then the marker
+      in the video: it samples a patch and sets the hue, tolerance and both
+      floors from what it finds. The readout below gives pixels found and the
+      blob radius <code>r</code>; a marker that is tracking cleanly shows a
+      steady radius of roughly a quarter of its own width. A radius that jumps
+      around means something else is being picked up.</p>
       <table id="tune"></table>
       <p class="note">Pixels found: <span id="counts" style="font-family:var(--mono)">--</span></p>
     </details>
@@ -219,16 +229,28 @@ Point the camera square at the leg plane.</p>
 <script>
 "use strict";
 
+/* Measured off a photograph of the real rig rather than guessed. Two things
+   that caught the first attempt out: the green sticker is pale, only 0.26
+   saturated, so a 0.28 floor threw nearly all of it away; and the foot marker
+   is cyan at hue 189, not blue at 215, so a window centred on 215 caught the
+   sticker at its edge while the far side swept in the blue-grey shadow beside
+   the foot, dragging the centroid sideways.
+
+   Yellow is the one to keep tight. The sticker sits in the middle of an orange
+   pulley whose highlights reach hue 44, right on top of the sticker's 45, so
+   hue alone does not separate them. Saturation and value do: the sticker is
+   0.74 and 0.65, the orange that overlaps in hue is darker and duller. */
 const COLORS = [
-  { key: "green",  label: "green, hip pitch", css: "#3fbf5f", h: 120, tol: 40, smin: 0.28, vmin: 0.18 },
-  { key: "yellow", label: "yellow, knee",     css: "#e3c020", h: 50,  tol: 18, smin: 0.38, vmin: 0.35 },
-  { key: "blue",   label: "blue, foot",       css: "#3f7fd0", h: 215, tol: 40, smin: 0.28, vmin: 0.18 },
+  { key: "green",  label: "green, hip pitch", css: "#3fbf5f", h: 106, tol: 18, smin: 0.15, vmin: 0.20 },
+  { key: "yellow", label: "yellow, knee",     css: "#e3c020", h: 45,  tol: 9,  smin: 0.55, vmin: 0.45 },
+  { key: "blue",   label: "cyan, foot",       css: "#35c0d0", h: 189, tol: 16, smin: 0.35, vmin: 0.22 },
 ];
 
 const MIN_PIXELS = 12;      /* below this the marker counts as lost */
 const STEP = 2;             /* sample every Nth pixel in each direction */
 const EMA = 0.3;            /* centroid smoothing */
 const HIST = 18;            /* frames used to judge steadiness */
+const MAXPTS = 24000;       /* per colour, per frame */
 
 const video  = document.createElement("video");
 video.playsInline = true; video.muted = true;
@@ -342,9 +364,23 @@ function hueDist(a, b) {
   return d > 180 ? 360 - d : d;
 }
 
+const buf = COLORS.map(() => ({ x: new Int16Array(MAXPTS), y: new Int16Array(MAXPTS), n: 0 }));
+const spread = {};
+
+/* Median of a slice of an Int16Array. Used instead of the mean for the first
+   estimate because it survives outliers: a mean is dragged by any stray patch
+   that happens to match, which is exactly how a marker ends up reported in the
+   wrong place, whereas the median ignores anything short of half the pixels. */
+function medianOf(arr, n) {
+  const a = Array.prototype.slice.call(arr.subarray(0, n));
+  a.sort((p, q) => p - q);
+  return a[n >> 1];
+}
+
 function detect(img) {
   const d = img.data, w = img.width, h = img.height;
   const acc = COLORS.map(() => ({ x: 0, y: 0, n: 0 }));
+  buf.forEach(b => { b.n = 0; });
 
   for (let y = 0; y < h; y += STEP) {
     let i = y * w * 4;
@@ -368,21 +404,46 @@ function detect(img) {
         const C = COLORS[c];
         if (s >= C.smin && mx >= C.vmin && hueDist(hh, C.h) <= C.tol) {
           acc[c].x += x; acc[c].y += y; acc[c].n++;
+          const b = buf[c];
+          if (b.n < MAXPTS) { b.x[b.n] = x; b.y[b.n] = y; b.n++; }
           break;
         }
       }
     }
   }
 
+  const gate = Math.max(30, Math.min(w, h) * 0.12);
+
   COLORS.forEach((C, c) => {
-    const a = acc[c];
-    if (a.n < MIN_PIXELS) { found[C.key] = null; return; }
-    const p = { x: a.x / a.n, y: a.y / a.n };
+    const b = buf[c];
+    if (b.n < MIN_PIXELS) { found[C.key] = null; spread[C.key] = 0; return; }
+
+    /* Start from the median, then keep only what lies within one marker's
+       reach of it and take the mean of that. The median finds the real blob;
+       the mean over the blob then gives sub-pixel precision. */
+    let cx = medianOf(b.x, b.n), cy = medianOf(b.y, b.n);
+    let sx = 0, sy = 0, sr = 0, n = 0;
+    for (let k = 0; k < b.n; k++) {
+      const dx = b.x[k] - cx, dy = b.y[k] - cy;
+      if (dx * dx + dy * dy > gate * gate) continue;
+      sx += b.x[k]; sy += b.y[k]; n++;
+    }
+    if (n < MIN_PIXELS) { found[C.key] = null; spread[C.key] = 0; return; }
+    cx = sx / n; cy = sy / n;
+    for (let k = 0; k < b.n; k++) {
+      const dx = b.x[k] - cx, dy = b.y[k] - cy;
+      if (dx * dx + dy * dy > gate * gate) continue;
+      sr += dx * dx + dy * dy;
+    }
+    spread[C.key] = Math.sqrt(sr / n);
+
+    const p = { x: cx, y: cy };
     const prev = found[C.key];
     found[C.key] = prev ? { x: prev.x + (p.x - prev.x) * EMA,
                             y: prev.y + (p.y - prev.y) * EMA } : p;
   });
-  el.counts.textContent = COLORS.map((C, c) => C.key + " " + acc[c].n).join("   ");
+  el.counts.textContent = COLORS.map((C, c) =>
+    C.key + " " + acc[c].n + "px r" + (spread[C.key] || 0).toFixed(0)).join("   ");
 }
 
 /* ------------------------------------------------------------------ angles */
@@ -462,22 +523,50 @@ canvas.addEventListener("mousedown", ev => {
   const p = canvasPos(ev);
   if (vertMode) { vertDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; return; }
   if (pickTarget) {
-    const img = ctx.getImageData(Math.round(p.x), Math.round(p.y), 1, 1).data;
-    const r = img[0] / 255, g = img[1] / 255, b = img[2] / 255;
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), df = mx - mn;
-    let hh = 0;
-    if (df !== 0) {
-      if (mx === r) hh = 60 * (((g - b) / df) % 6);
-      else if (mx === g) hh = 60 * (((b - r) / df) + 2);
-      else hh = 60 * (((r - g) / df) + 4);
-      if (hh < 0) hh += 360;
+    /* Sample a patch, not a pixel. One pixel gives no idea how much the marker
+       varies across its own face, and the tolerance has to cover that variation
+       or most of the marker is thrown away. Hue is averaged as an angle so that
+       a marker sitting near the 0/360 wrap does not average to the opposite
+       side of the wheel. */
+    const R = 9;
+    const x0 = Math.max(0, Math.round(p.x) - R), y0 = Math.max(0, Math.round(p.y) - R);
+    const w = Math.min(2 * R + 1, canvas.width - x0), h = Math.min(2 * R + 1, canvas.height - y0);
+    const d = ctx.getImageData(x0, y0, w, h).data;
+
+    let sinSum = 0, cosSum = 0;
+    const hs = [], ss = [], vs = [];
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), df = mx - mn;
+      let hh = 0;
+      if (df > 1e-6) {
+        if (mx === r) hh = 60 * (((g - b) / df) % 6);
+        else if (mx === g) hh = 60 * (((b - r) / df) + 2);
+        else hh = 60 * (((r - g) / df) + 4);
+        if (hh < 0) hh += 360;
+      }
+      const rad = hh * Math.PI / 180;
+      sinSum += Math.sin(rad); cosSum += Math.cos(rad);
+      hs.push(hh); ss.push(mx === 0 ? 0 : df / mx); vs.push(mx);
     }
+    const hue = (Math.atan2(sinSum / hs.length, cosSum / hs.length) * 180 / Math.PI + 360) % 360;
+
+    /* Tolerance from how far the patch actually strays, with a floor so a very
+       uniform marker still has room for a change of light. Saturation and value
+       floors sit just under the dimmest part of the patch, which is what keeps
+       a pale marker from being rejected and a bright background from being
+       accepted. */
+    let worst = 0;
+    for (const hh of hs) worst = Math.max(worst, hueDist(hh, hue));
+    const pct = (a, q) => { const t = a.slice().sort((x, y) => x - y); return t[Math.floor(q * (t.length - 1))]; };
+
     const C = COLORS.find(c => c.key === pickTarget);
-    C.h = Math.round(hh);
-    C.smin = Math.max(0.15, (mx === 0 ? 0 : df / mx) * 0.6);
-    C.vmin = Math.max(0.12, mx * 0.5);
+    C.h = Math.round(hue);
+    C.tol = Math.round(Math.min(45, Math.max(8, worst * 1.2 + 4)));
+    C.smin = Math.max(0.10, pct(ss, 0.05) * 0.7);
+    C.vmin = Math.max(0.08, pct(vs, 0.05) * 0.7);
     syncTuneLabels();
-    el.err.textContent = "";
+    el.err.textContent = "picked " + pickTarget + ": hue " + C.h + " +/- " + C.tol;
     pickTarget = null;
   }
 });
@@ -506,7 +595,7 @@ function drawOverlay() {
   ctx.lineWidth = 2;
   if (g && y) { ctx.strokeStyle = "#3fbf5f"; line(g, y); }
   if (y && b) { ctx.strokeStyle = "#e3c020"; line(y, b); }
-  if (g && b) { ctx.strokeStyle = "rgba(63,127,208,0.55)"; ctx.setLineDash([6, 5]); line(g, b); ctx.setLineDash([]); }
+  if (g && b) { ctx.strokeStyle = "rgba(53,192,208,0.55)"; ctx.setLineDash([6, 5]); line(g, b); ctx.setLineDash([]); }
 
   COLORS.forEach(C => {
     const p = found[C.key];
