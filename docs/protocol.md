@@ -200,11 +200,22 @@ of its own traffic for a command.
 
 ## 9. Open items
 
-- The maxima the percentages scale to are unmeasured, and cannot be chosen
-  before the link lengths exist. Maximum body velocity, maximum yaw rate,
-  maximum lean and the height offset range all live on the Mega.
-- Whether 50 Hz remains adequate once the Mega is confirmed at 100 Hz. Measure
-  arrival jitter on the Mega before deciding to raise it.
+- Maximum yaw rate and maximum lean are still unmeasured, and both wait on the
+  hip positions `r_i`, since neither means anything for a single leg.
+
+  Maximum body velocity is now measured, at least for one leg walking straight:
+  a 90 mm stride at 0.65 Hz, or about **60 mm/s**. The ceiling is the knee
+  servo's speed rather than anything geometric, so it will not improve by
+  commanding more. See `kinematics.md` section 7.
+
+  The height offset is measured but is **not independent of speed**, which
+  section 3 assumes it is. A crouch of 13 mm cuts the achievable stride from 90
+  mm to about 22. Either the Mega derates the stride as height moves off
+  nominal, or the two have to be negotiated on the Pi side; the protocol as it
+  stands lets the operator ask for a combination the leg cannot walk.
+- ~~Whether 50 Hz remains adequate once the Mega is confirmed at 100 Hz.~~ The
+  Mega is confirmed at 100 Hz, with 2.6 ms used of the 10 ms budget for one leg.
+  Arrival jitter is still unmeasured, and the link itself is still unbuilt.
 - Telemetry payload, whenever the reverse channel is built.
 - Whether the D-pad should command a lean directly or trim one incrementally.
   Section 3 assumes direct: held means leaning. See the note in the Pi

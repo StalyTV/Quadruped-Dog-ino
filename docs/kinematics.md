@@ -125,15 +125,31 @@ of **103 degrees**, not 62. In pulse width, at 11.111 us/deg:
 Limits are enforced on the servo angles, not on the joint angles, and the knee
 is the joint with the least margin by a wide margin of its own.
 
-**Stride limit.** At the 125 mm nominal stance, straight-line strides stay
-inside the 85 percent band up to about 100 mm. Beyond that the foot passes 86
-percent at the extremes of the path and heads toward the singularity. A
-sideways stride is the worse case, reaching 91 percent at 80 mm, because
-abduction costs reach that fore-aft motion does not. Clamp the commanded stride
-accordingly, and treat 100 mm as the ceiling until measured otherwise.
+**Stride limit.** The geometry alone allows about 100 mm at the 125 mm stance
+before the foot passes 86 percent of full extension at the extremes of the
+path. A sideways stride is the worse case, reaching 91 percent at 80 mm,
+because abduction costs reach that fore-aft motion does not.
 
-The `height` field in `protocol.md` scales to the -13 to +11 mm band above. The
-Mega owns that clamp; do not widen it without rechecking the reach margin.
+On the leg as built the binding constraint is not the geometry but the hip
+pitch stop, which caps the stride at **90 mm**. See section 8.
+
+**Height is not free while walking.** The band above is for a stationary leg.
+Once it is striding, the achievable stride is a strong function of stance
+height and peaks sharply at the nominal:
+
+| Stance | Max stride |
+|---|---|
+| 112 mm | 22 mm |
+| 118 mm | 52 mm |
+| **125 mm** | **90 mm** |
+| 132 mm | 76 mm |
+
+Both directions cost stride, and crouching costs it fastest: lifting the foot
+30 mm during swing from an already low stance folds the knee past its limit.
+So the `height` field in `protocol.md` cannot be treated as independent of
+speed. The Mega owns both clamps, and it has to reduce the commanded stride as
+the commanded height moves away from nominal rather than letting the two be
+set separately.
 
 ## 3. Forward kinematics
 

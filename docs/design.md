@@ -78,8 +78,9 @@ generator covers the whole space.
 ### Arduino Mega 2560
 
 Chosen for pin count and RAM over an Uno. 16 MHz AVR, no floating point unit,
-which is the main constraint on loop rate. Software float trig is expensive;
-see the budget in `kinematics.md` section 7.
+so software float trig was expected to be the constraint on loop rate. Measured,
+it is not: one leg costs 3.6 ms per tick at 100 Hz, of which 1.4 ms was the I2C
+bus rather than the arithmetic. See `kinematics.md` section 7.
 
 ### PCA9685, 16 channel PWM driver
 
@@ -109,10 +110,15 @@ Two things about this board are easy to get wrong:
   the Mega side. V+ is the high-current servo supply from the UBEC. Do not bridge
   them.
 - The default output frequency is 50 Hz, which quantises servo position to about
-  0.44 degrees per count and adds up to 20 ms of latency. Most digital servos
-  accept 200 to 333 Hz. Raise the prescaler to whatever the servo datasheet
-  permits. This is the single cheapest improvement to motion smoothness
-  available, and it is one line of setup code.
+  0.44 degrees per count and adds up to 20 ms of latency. **This project runs
+  100 Hz**, where a count is 0.22 degrees, just inside the DS3230's 0.27 degree
+  dead band, so the driver stops being what limits precision. Going higher buys
+  latency but no accuracy, and costs current. The reasoning is in
+  `kinematics.md` section 8.
+- The default bus speed is 100 kHz, and **this project runs 400 kHz**. Three
+  servo writes at the default are 1.4 ms, so twelve would be 5.7 ms of a 10 ms
+  control budget before any arithmetic. At 400 kHz the same twelve are about
+  1.4 ms. The board will take 1 MHz if four legs turn out to need it.
 
 ### Servos
 
@@ -306,12 +312,20 @@ tabulated in `kinematics.md` section 2.
 
 ## 5. Roadmap
 
-1. Bench: one leg, one PCA9685, existing small battery. Calibrate the servo
-   tables. Verify IK by commanding known foot positions and measuring them.
-2. Linkage inversion, verified against CAD by comparing commanded servo angle to
-   observed joint angle over the full range.
-3. Gait generator on one leg, in the air. Check that the foot traces the
-   expected path and that joint velocity is continuous at touchdown.
+1. **Done.** Bench: one leg, one PCA9685, existing small battery. Servo table
+   calibrated by sweeping each joint and fitting, with the angles read off a
+   webcam rig rather than a protractor. Still outstanding from this step:
+   commanding known foot positions and measuring where the foot actually goes,
+   which is test plan item 6 and the baseline the learned IK layer needs.
+2. **Done, and smaller than expected.** The hip pitch linkage turned out to be
+   a parallelogram, so there is nothing to invert; the mapping is a constant
+   that `zero_us` absorbs. The knee's belt is the coupling that matters, and it
+   is linear. Verified against the leg rather than against CAD: the calibration
+   sweep itself confirms the 2:1 ratio, since the fitted slope comes out at
+   twice the servo's own.
+3. **Done.** Gait generator on one leg, in the air. Foot path continuity is
+   checked on the host rather than by eye: horizontal velocity matches the
+   stance velocity at both transitions and vertical velocity is zero there.
 4. Four legs on a stand, feet off the ground. Verify phase offsets and that a
    twist command produces sensible per-leg strides.
 5. Power system upgrade. Do not skip this before putting weight on the legs.
